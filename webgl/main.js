@@ -6,7 +6,7 @@ var loadShader = function(type, source) {
 	gl.shaderSource(shader, source);
 	gl.compileShader(shader);
 	
-	var compileStatus = gl.getShaderParameter(shader, gl.COMPILE_STATUS));
+	var compileStatus = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
 	if (!compileStatus) {
 		console.log("Shader not compiled... deleting");
 		gl.deleteShader(shader);
