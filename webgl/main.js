@@ -8,7 +8,6 @@ var loadShader = function(type, source) {
 	
 	var compileStatus = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
 	if (!compileStatus) {
-		console.log("Shader not compiled... deleting");
 		gl.deleteShader(shader);
 	}
 	
@@ -26,7 +25,6 @@ var Program = function (vsSource, fsSource) {
 	
 	var linkStatus = gl.getProgramParameter(this.program, gl.LINK_STATUS);
 	if (!linkStatus) {
-		console.log("Program not linked properly");
 	}
 	
 	this.attribLocations = {};
