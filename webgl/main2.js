@@ -50,22 +50,22 @@ var XGL;
 		this.buffers = {};
 	};
 
-	Program.prototype.addAttribLocation(name, id) {
+	Program.prototype.addAttribLocation = function(name, id) {
 		this.attribLocations[name] = gl.getAttribLocation(this.program, id);
 	};
 
-	Program.prototype.addUniformLocation(name, id) {
+	Program.prototype.addUniformLocation = function(name, id) {
 		this.uniformLocations[name] = gl.getUniformLocation(this.program, id);
 	};
 
-	Program.prototype.addArrayBuffer(name, data) {
+	Program.prototype.addArrayBuffer = function(name, data) {
 		var buffer = gl.createBuffer();
 		gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
 		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
 		this.buffers[name] = buffer;
 	};
 
-	Program.prototype.addIndexBuffer(name, data) {
+	Program.prototype.addIndexBuffer = function(name, data) {
 		var buffer = gl.createBuffer();
 		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffer);
 		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new UInt16Array(data), gl.STATIC_DRAW);
