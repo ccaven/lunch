@@ -1,7 +1,10 @@
-
-var XGL = {};
+var XGL;
 
 (function () {
+	
+	var author = "xacer";
+	
+	var version = "1.0.0";
 	
 	var gl, canvas;
 	
@@ -68,8 +71,7 @@ var XGL = {};
 		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new UInt16Array(data), gl.STATIC_DRAW);
 		this.buffers[name] = buffer;
 	};
-
+	XGL = {};
 	XGL.Program = Program;
-	XGL.loadGL = loadGL;
-	
+	XGL.loadGL = loadGL;	
 }) ();
