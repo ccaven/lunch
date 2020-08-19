@@ -166,7 +166,7 @@ var XGL;
 		];
 		
 		this.nodes = this.nodes.concat(newNodes);
-		this.elements = this.elements.concat(newNodes);
+		this.elements = this.elements.concat(newIndex);
 		this.colors = this.colors.concat(newColors);
 	};
 	
@@ -190,7 +190,7 @@ var XGL;
 		];
 		
 		this.nodes = this.nodes.concat(newNodes);
-		this.elements = this.elements.concat(newNodes);
+		this.elements = this.elements.concat(newIndex);
 		this.colors = this.colors.concat(newColors);
 	};
 	
