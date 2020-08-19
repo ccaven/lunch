@@ -8,8 +8,6 @@ var XGL;
 	
 	var gl, canvas;
 	
-	var getCrossProduct = function
-	
 	var loadGL = function(c) {
 		XGL.canvas = c;
 		XGL.width = c.width;
