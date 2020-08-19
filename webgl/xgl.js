@@ -13,10 +13,10 @@ var XGL;
 		XGL.width = c.width;
 		XGL.height = c.height;
     
-    var glArgs = {
-      preserveDrawingBuffer: true,
-      failIfMajorPerformanceCaveat: true
-    };
+		var glArgs = {
+			preserveDrawingBuffer: true,
+			failIfMajorPerformanceCaveat: true
+		};
 		
 		XGL.gl = XGL.canvas.getContext("webgl", glArgs);
 		
@@ -109,32 +109,33 @@ var XGL;
 	};
 	
 	Program.prototype.display = function (vertexCount, type, offset) {
+		gl.useProgram(this.program);
 		offset = offset || 0;
 		type = type || gl.UNSIGNED_SHORT;
 		gl.drawElements(gl.TRIANGLES, vertexCount, type, offset);
 	};
   
-  Program.prototype.clearScreen = function (r, g, b) {
-    gl.clearColor(r, g, b, 1.0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-  };
-  
-  Program.prototype.clearDepth = function () {
-    gl.clearDepth(1.0);
-    gl.clear(gl.DEPTH_BUFFER_BIT);
-  };
-  
-  Program.prototype.enableDepthTest = function () {
-    gl.enable(gl.DEPTH_TEST);
-    gl.depthFunc(gl.LEQUAL);
-  };
-	
-  Program.prototype.injectTexture2D = function (uniformName, n, textureObject) {
-    gl.activeTexture(gl.TEXTURE0 + n);
-    var tex = gl.createTexture();
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, textureObject.width, textureObject.height, 0, gl.RGB, gl.UNSIGNED_BYTE, textureObject.data);
-    this.setUniform(uniformName, "1i", n);
-  };
+	Program.prototype.clearScreen = function (r, g, b) {
+		gl.clearColor(r, g, b, 1.0);
+		gl.clear(gl.COLOR_BUFFER_BIT);
+	};
+
+	Program.prototype.clearDepth = function () {
+		gl.clearDepth(1.0);
+		gl.clear(gl.DEPTH_BUFFER_BIT);
+	};
+
+	Program.prototype.enableDepthTest = function () {
+		gl.enable(gl.DEPTH_TEST);
+		gl.depthFunc(gl.LEQUAL);
+	};
+
+	Program.prototype.injectTexture2D = function (uniformName, n, textureObject) {
+		gl.activeTexture(gl.TEXTURE0 + n);
+		var tex = gl.createTexture();
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, textureObject.width, textureObject.height, 0, gl.RGB, gl.UNSIGNED_BYTE, textureObject.data);
+		this.setUniform(uniformName, "1i", n);
+	};
   
 	XGL = {};
 	XGL.Program = Program;
