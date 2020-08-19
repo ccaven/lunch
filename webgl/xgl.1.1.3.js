@@ -93,7 +93,9 @@ var XGL;
 	
 	Program.prototype.setUniform = function (uniformName, type, o1, o2, o3, o4) {
 		var loc = this.uniformLocations[uniformName];
-		if(type[0] === "1") {
+		if(type[type.length-1] === "f") {
+			gl["uniform" + type](loc, o1);
+		} else if(type[0] === "1") {
 			gl["uniform" + type](loc, o1);
 		} else if (type[0] === "2") {
 			gl["uniform" + type](loc, o1, o2);
