@@ -157,9 +157,9 @@ var XGL;
 		
 		var newColors = [
 			r, g, b, 1.0,
-			r, g, b, 1.0,
-			r, g, b, 1.0,
-			r, g, b, 1.0
+			g, r, b, 1.0,
+			b, g, r, 1.0,
+			b, r, g, 1.0
 		];
 		
 		var newIndex = [
