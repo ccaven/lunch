@@ -53,6 +53,8 @@ var XGL;
 		this.attribLocations = {};
 		this.uniformLocations = {};
 		this.buffers = {};
+		
+		gl.useProgram(this.program);
 	};
 
 	Program.prototype.addAttribLocation = function(name, id) {
