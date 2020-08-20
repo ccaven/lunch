@@ -49,7 +49,7 @@ var XGL;
 	
 	Shader.prototype.setUniform = function(uniformName, type, o1, o2, o3, o4) {
 		var loc = this.uniformLocations[uniformName];
-		if (type[type.length - 1] === "f") {
+		if (type[type.length - 1] === "v") {
 			gl["uniform" + type](loc, o1);
 		} else if (type[0] === "1") {
 			gl["uniform" + type](loc, o1);
