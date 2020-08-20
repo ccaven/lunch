@@ -81,6 +81,6 @@ var XSHADER;
   Shader.prototype.display = function (deltaTime) {
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   };
-  
+  XSHADER = {};
   XSHADER.Shader = Shader;
 }) ();
