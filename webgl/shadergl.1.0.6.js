@@ -81,6 +81,7 @@ var XGL;
 		var positionLocation = gl.getAttribLocation(this.program, "a_position");
 		gl.enableVertexAttribArray(positionLocation);
 		gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+		gl.useProgram(this.program);
 	};
 	
 	Shader.prototype.display = function(deltaTime) {
