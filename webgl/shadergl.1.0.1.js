@@ -83,4 +83,5 @@ var XSHADER;
   };
   XSHADER = {};
   XSHADER.Shader = Shader;
+  XSHADER.loadGL = loadGL;
 }) ();
