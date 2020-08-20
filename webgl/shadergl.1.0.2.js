@@ -6,7 +6,7 @@ var XSHADER;
   var gl;
   
   var loadGL = function (c) {
-    gl = c.getContext("2d");
+    gl = c.getContext("webgl");
     XSHADER.gl = gl;
     XSHADER.canvas = gl.canvas;
   };
