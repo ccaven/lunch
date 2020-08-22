@@ -302,9 +302,9 @@ var XGL;
 			var newFaces = [];
 			for (var j = 0; j < faces.length; j ++) {
 				var tri = faces[j];
-				var v1 = mp(tri[0], tri[1], mpCache, verts);
-				var v2 = mp(tri[1], tri[2], mpCache, verts);
-				var v3 = mp(tri[2], tri[0], mpCache, verts);
+				var v1 = findMidpoint(tri[0], tri[1], mpCache, verts);
+				var v2 = findMidpoint(tri[1], tri[2], mpCache, verts);
+				var v3 = findMidpoint(tri[2], tri[0], mpCache, verts);
 
 				newFaces.push([tri[0], v1, v3]);
 				newFaces.push([tri[1], v2, v1]);
