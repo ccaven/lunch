@@ -4,7 +4,7 @@ var XGL;
 	
 	var author = "xacer";
 	
-	var version = "1.0.0";
+	var PHI = (1 + Math.sqrt(5)) / 2;
 	
 	var gl, canvas;
 	
@@ -23,7 +23,49 @@ var XGL;
 		gl = XGL.gl;
 		canvas = XGL.canvas;
 	};
+	
+	var min = function (a, b) {
+		return a > b ? b : a;
+	};
+	
+	var max = function (a, b) {
+		return a < b ? b : a;
+	};
+	
+	var normalizeVertex = function (v) {
+		var s = 1 / Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+		return [v[0] * s, v[1] * s, v[2] * s];
+	};
+	
+	var lerp = function (a, b, k) {
+		return k * (b + a) + a;
+	};
+	
+	var lerpVertex = function (a, b, k) {
+		return [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)];
+	};
+	
+	var findMidpoint = function (p1, p2, mpCache, verts) {
+		var si = min(p1, p2);
+		var mi = max(p1, p2);
+		var key = si + "-" + mi;
+		if (mpCache[key]) {
+			return mpCache[key];
+		}
 
+		var v1 = verts[p1];
+		var v2 = verts[p2];
+		var md = lerpVertex(v1, v2, 0.5);
+
+		verts.push(normalizeVertex(md[0], md[1], md[2]));
+
+		var index = verts.length - 1;
+
+		mpCache[key] = index;
+
+		return index;
+	};
+	
 	var loadShader = function(type, source) {
 		var shader = gl.createShader(type);
 		gl.shaderSource(shader, source);
@@ -235,6 +277,70 @@ var XGL;
 			x + w/2, y + h/2, z + d/2,
 			x - w/2, y + h/2, z + d/2, 
 			faceColors[5][0], faceColors[5][1], faceColors[5][2]);
+	};
+	
+	WorldEditor.prototype.addIsosphere = function (x, y, z, radius, nDivisions, colorFunc, specialFunc) {
+		var verts = [
+			normalizeVertex(-1, PHI, 0),
+			normalizeVertex(1, PHI, 0),
+			normalizeVertex(-1, -PHI, 0), 
+			normalizeVertex( 1, -PHI, 0), 
+			normalizeVertex(0, -1, PHI), 
+			normalizeVertex(0, 1, PHI), 
+			normalizeVertex(0, -1, -PHI), 
+			normalizeVertex(0, 1, -PHI),
+			normalizeVertex( PHI, 0, -1), 
+			normalizeVertex( PHI, 0, 1), 
+			normalizeVertex(-PHI, 0, -1), 
+			normalizeVertex(-PHI, 0, 1),
+		];
+		var faces = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],[4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
+		
+		var mpCache = {};
+		
+		for (var i = 0; i < nDivisions; i ++) {
+			var newFaces = [];
+			for (var j = 0; j < faces.length; j ++) {
+				var tri = faces[j];
+				var v1 = mp(tri[0], tri[1], mpCache, verts);
+				var v2 = mp(tri[1], tri[2], mpCache, verts);
+				var v3 = mp(tri[2], tri[0], mpCache, verts);
+
+				newFaces.push([tri[0], v1, v3]);
+				newFaces.push([tri[1], v2, v1]);
+				newFaces.push([tri[2], v3, v2]);
+				newFaces.push([v1, v2, v3]);
+			}
+			faces.length = 0;
+			faces = newFaces;
+		}
+		
+		var colors = [];
+
+		for (var i = 0; i < verts.length; i ++) {			
+			var col = colorFunc(verts[i]);
+			colors[i] = col;
+			
+			if (specialFunc) {
+				verts[i] = specialFunc(verts[i]);
+			}
+			
+			verts[i][0] = verts[i][0] * radius + x;
+			verts[i][1] = verts[i][1] * radius + y;
+			verts[i][2] = verts[i][2] * radius + z;
+		}	
+		
+		this.nodes.concat(this.verts);
+		this.colors.concat(colors);
+		
+		var i0 = verts.length - 1;
+		
+		for (var i = 0; i < faces.length; i ++) {
+			var tri = this.faces[i];
+			this.elements.push(tri[0] + i0);
+			this.elements.push(tri[1] + i0);
+			this.elements.push(tri[2] + i0);
+		}
 	};
 	
 	WorldEditor.prototype.loadDataIntoProgram = function (shaderProgram, vBuffer, cBuffer, eBuffer) {
