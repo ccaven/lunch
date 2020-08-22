@@ -294,7 +294,26 @@ var XGL;
 			normalizeVertex(-PHI, 0, -1), 
 			normalizeVertex(-PHI, 0, 1),
 		];
-		var faces = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],[4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
+		var faces = [[0, 11, 5],
+			     [0, 5, 1], 
+			     [0, 1, 7], 
+			     [0, 7, 10], 
+			     [0, 10, 11], 
+			     [1, 5, 9], 
+			     [5, 11, 4],
+			     [11, 10, 2],
+			     [10, 7, 6],
+			     [7, 1, 8], 
+			     [3, 9, 4], 
+			     [3, 4, 2], 
+			     [3, 2, 6], 
+			     [3, 6, 8], 
+			     [3, 8, 9],
+			     [4, 9, 5],
+			     [2, 4, 11], 
+			     [6, 2, 10], 
+			     [8, 6, 7], 
+			     [9, 8, 1]];
 		
 		var mpCache = {};
 		
@@ -319,7 +338,7 @@ var XGL;
 
 		for (var i = 0; i < verts.length; i ++) {			
 			var col = colorFunc(verts[i]);
-			colors[i] = col;
+			colors = colors.concat(col);
 			
 			if (specialFunc) {
 				verts[i] = specialFunc(verts[i]);
@@ -330,10 +349,10 @@ var XGL;
 			verts[i][2] = verts[i][2] * radius + z;
 		}	
 		
-		this.nodes.concat(this.verts);
-		this.colors.concat(colors);
+		var i0 = this.nodes.length - 1;
 		
-		var i0 = verts.length - 1;
+		this.nodes = this.nodes.concat(verts);
+		this.colors = this.colors.concat(colors);		
 		
 		for (var i = 0; i < faces.length; i ++) {
 			var tri = this.faces[i];
