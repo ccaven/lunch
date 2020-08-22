@@ -317,9 +317,9 @@ var XGL;
 		
 		var colors = [];
 
-		for (var i = 0; i < verts.length; i ++) {
-			
-			// Calculate colors here and add to array
+		for (var i = 0; i < verts.length; i ++) {			
+			var col = colorFunc(verts[i]);
+			colors[i] = col;
 			
 			if (specialFunc) {
 				verts[i] = specialFunc(verts[i]);
@@ -330,9 +330,8 @@ var XGL;
 			verts[i][2] = verts[i][2] * radius + z;
 		}	
 		
-		for (var i = 0; i < verts.length; i ++) {
-			this.nodes.concat(this.verts[i]);
-		}
+		this.nodes.concat(this.verts);
+		this.colors.concat(colors);
 		
 		var i0 = verts.length - 1;
 		
