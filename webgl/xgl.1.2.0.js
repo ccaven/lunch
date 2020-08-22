@@ -355,7 +355,7 @@ var XGL;
 		this.colors = this.colors.concat(colors);		
 		
 		for (var i = 0; i < faces.length; i ++) {
-			var tri = this.faces[i];
+			var tri = faces[i];
 			this.elements.push(tri[0] + i0);
 			this.elements.push(tri[1] + i0);
 			this.elements.push(tri[2] + i0);
