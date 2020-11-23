@@ -36,7 +36,7 @@ var XGL;
 	};
 	
 	var Shader = function(fsSource) {
-		this.vsSource = "attribute vec2 a_position;void main() { gl_Position = vec4(a_position.xy, 0.0, 1.0); }";
+		this.vsSource = "attribute vec2 a_position; void main() { gl_Position = vec4(a_position.xy, 0.0, 1.0); }";
 		this.fsSource = fsSource;
 		this.vertexShader = loadShader(gl.VERTEX_SHADER, this.vsSource);
 		this.fragmentShader = loadShader(gl.FRAGMENT_SHADER, this.fsSource);
