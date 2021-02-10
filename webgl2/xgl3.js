@@ -1,3 +1,35 @@
+
+function createShader(gl, type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+
+    const success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+    if (success) return shader;
+
+    console.error(gl.getShaderInfoLog(shader));
+    gl.deleteShader(shader);
+}
+
+function createProgram (gl, vs, fs) {
+	
+	const vsSource = document.getElementById(vs).text.trim();
+	const fsSource = document.getElementById(fs).text.trim();
+	
+	const vShader = createShader(gl, gl.VERTEX_SHADER, vsSource);
+	
+	const fShader = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+	
+	const program = gl.createProgram();
+	gl.attachShader(program, vShader);
+	gl.attachShader(program, fShader);
+	
+	gl.linkProgram(program);
+	
+	return program;
+}
+
+
 let Renderer = (function () {
   function scrapeIn (source, out) {
     source.split("\n").forEach(line => {
