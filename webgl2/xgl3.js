@@ -30,7 +30,7 @@ function createProgram (gl, vs, fs) {
 }
 
 
-let Renderer = (function () {
+var Renderer = (function () {
   function scrapeIn (source, out) {
     source.split("\n").forEach(line => {
       let words = line.trim().replace(";", "").split(" ");
@@ -106,7 +106,7 @@ let Renderer = (function () {
   };
 }) ();
 
-let Mesh = (function () {
+var Mesh = (function () {
 
   const cubePositions = [
     0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1,
@@ -210,8 +210,7 @@ let Mesh = (function () {
   };
 
 }) ();
-
-let PixelRenderer = (function () {
+var PixelRenderer = (function () {
   const screenPositions = [-1, -1, 1, -1, 1, 1, -1, 1];
   const screenTris = [0, 1, 2, 0, 2, 3];
 
@@ -233,7 +232,7 @@ let PixelRenderer = (function () {
   };
 }) ();
 
-let RenderTexture = (function () {
+var RenderTexture = (function () {
   return class {
     constructor (width, height, useDepthBuffer=false) {
       this.width = width;
