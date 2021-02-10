@@ -264,8 +264,14 @@ var RenderTexture = (function () {
     }
 
     setRenderTarget () {
+      gl.viewport(0, 0, this.width, this.height);
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer);
     }
   };
 
 }) ();
+
+function renderToScreen () {
+  gl.viewport(0, 0, width, height);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
