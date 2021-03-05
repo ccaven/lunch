@@ -10,10 +10,17 @@ typeof define === 'function' && define.amd ? define(['exports'], factory) :
 (global = typeof globalThis !== 'undefined' ? globalThis : global || self, factory(global.xgl = {}));
 }(this, (function (exports) {
 
+    const author = "xacer";
+    const version = "1.0.0";
+
     /** @type {WebGL2RenderingContext} */
     var gl;
 
     'use strict';
+
+    function activateWebGL (context) {
+        gl = context;
+    }
 
     function createShader (gl, type, source) {
         const shader = gl.createShader(type);
@@ -211,6 +218,12 @@ typeof define === 'function' && define.amd ? define(['exports'], factory) :
     exports.Mesh = Mesh;
     exports.PixelRenderer = PixelRenderer;
     exports.RenderTexture = RenderTexture;
+
+    exports.activateWebGL = activateWebGL;
+    exports.createProgram = createProgram;
+
+    exports.author = author;
+    exports.version = version;
 
     Object.defineProperty(exports, '__esModule', { value: true });
 
