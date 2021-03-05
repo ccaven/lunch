@@ -181,8 +181,8 @@ typeof define === 'function' && define.amd ? define(['exports'], factory) :
             super(...arguments);
 
             this.mesh = new Mesh("position", 2);
-            this.mesh.setData("position", new Float32Array(screenPositions));
-            this.mesh.setData("triangles", new Uint16Array(screenTris));
+            this.mesh.setData("position", new Float32Array(PixelRenderer.screenPositions));
+            this.mesh.setData("triangles", new Uint16Array(PixelRenderer.screenTris));
             this.mesh.setBuffers();
             this.mesh.setAttribPointers(this);
         }
