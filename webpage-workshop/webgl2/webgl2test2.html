@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGL2 test 2</title>
+    <style>
+        * {
+            margin: 0px;
+            padding: 0px;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Output canvas -->
+    <canvas id="output"></canvas>
+
+    <!-- glMatrix library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/2.8.1/gl-matrix-min.js"></script>
+
+    <!-- Planet vertex shader -->
+    <script id="planet-vertex" type="text/glsl">#version 300 es
+        uniform mat4 u_projection;
+
+        in vec4 a_position;
+        in vec4 a_color;
+
+        out vec4 v_color;
+
+        void main () {
+            gl_Position = u_projection * a_position;
+            v_color = a_color;
+        }
+    </script>
+
+    <!-- Planet fragment shader -->
+    <script id="planet-fragment" type="text/glsl">#version 300 es
+        precision highp float;
+
+        in vec4 v_color;
+
+        out vec4 outColor;
+
+        void main () {
+            outColor = v_color;
+        }
+    </script>
+
+    <script>
+
+        var globWidth = window.innerWidth;
+        var globHeight = window.innerHeight;
+
+        function main () {
+            /**
+             * Program constants
+            */
+            const PI = 3.141592653589793238;
+            const PHI = 1.618033988749894848;
+
+            /**
+             * @type {HTMLCanvasElement}
+            */
+            const canvas = document.querySelector("#output");
+            canvas.width = globWidth;
+            canvas.height = globHeight;
+
+            /**
+             * @type {WebGL2RenderingContext}
+            */
+            const gl = canvas.getContext("webgl2");
+
+            if (!gl) {
+                console.log("Fail");
+                return;
+            }
+
+            gl.viewport(0, 0, globWidth, globHeight);
+
+            gl.clearColor(1.0, 0.5, 0.5, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthFunc(gl.LEQUAL);
+
+            const terrain = {
+                initialize () {
+                    this.program = createProgram(gl, "planet-vertex", "planet-fragment");
+                    gl.useProgram(this.program);
+
+                    this.attribLocations = {
+                        "a_position": gl.getAttribLocation(this.program, "a_position"),
+                        "a_color": gl.getAttribLocation(this.program, "a_color")
+                    };
+
+                    this.uniformLocations = {
+                        "u_projection": gl.getUniformLocation(this.program, "u_projection")
+                    };
+
+                    gl.enableVertexAttribArray(this.attribLocations.a_position);
+                    gl.enableVertexAttribArray(this.attribLocations.a_color);
+                },
+
+                enableVertexAttribArray () {
+                    gl.enableVertexAttribArray(this.attribLocations.a_position);
+                    gl.enableVertexAttribArray(this.attribLocations.a_color);
+                },
+
+                disableVertexAttribArray () {
+                    gl.disableVertexAttribArray(this.attribLocations.a_position);
+                    gl.disableVertexAttribArray(this.attribLocations.a_color);
+                },
+            };
+
+            terrain.initialize();
+
+            const planet = {
+                initialize () {
+                    this.vao = gl.createVertexArray();
+
+                    this.vertexBuffer = gl.createBuffer();
+                    this.triangleBuffer = gl.createBuffer();
+                    this.colorBuffer = gl.createBuffer();
+
+                    this.vertices = [];
+                    this.triangles = [];
+                    this.colors = [];
+                },
+
+                generateMesh () {
+                    let numDivisions = 3;
+
+                    let verts = [
+                        nvec3(-1, PHI, 0),
+                        nvec3(1, PHI, 0),
+                        nvec3(-1, -PHI, 0),
+                        nvec3( 1, -PHI, 0),
+                        nvec3(0, -1, PHI),
+                        nvec3(0, 1, PHI),
+                        nvec3(0, -1, -PHI),
+                        nvec3(0, 1, -PHI),
+                        nvec3( PHI, 0, -1),
+                        nvec3( PHI, 0, 1),
+                        nvec3(-PHI, 0, -1),
+                        nvec3(-PHI, 0, 1),
+                    ];
+
+                    let faces = [
+                        [0, 11, 5],
+                        [0, 5, 1],
+                        [0, 1, 7],
+                        [0, 7, 10],
+                        [0, 10, 11],
+                        [1, 5, 9],
+                        [5, 11, 4],
+                        [11, 10, 2],
+                        [10, 7, 6],
+                        [7, 1, 8],
+                        [3, 9, 4],
+                        [3, 4, 2],
+                        [3, 2, 6],
+                        [3, 6, 8],
+                        [3, 8, 9],
+                        [4, 9, 5],
+                        [2, 4, 11],
+                        [6, 2, 10],
+                        [8, 6, 7],
+                        [9, 8, 1]
+                    ];
+
+                    let mpCache = {};
+                    function mp (p1, p2) {
+                        let si = Math.min(p1, p2);
+                        let mi = Math.max(p1, p2);
+                        let k = si + "-" + mi;
+                        if (mpCache[k]) return mpCache[k];
+                        let v1 = verts[p1];
+                        let v2 = verts[p2];
+                        let md = midpoint(v1, v2);
+                        verts.push(nvec3(md.x, md.y, md.z));
+                        let inx = verts.length - 1;
+                        mpCache[k] = inx;
+                        return inx;
+                    }
+
+                    for (let i = 0; i < numDivisions; i ++) {
+                        let newFaces = [];
+                        for (let j = 0; j < faces.length; j ++) {
+                            let tri = faces[j];
+                            let v1 = mp(tri[0], tri[1]);
+                            let v2 = mp(tri[1], tri[2]);
+                            let v3 = mp(tri[2], tri[0]);
+
+                            newFaces.push([tri[0], v1, v3]);
+                            newFaces.push([tri[1], v2, v1]);
+                            newFaces.push([tri[2], v3, v2]);
+                            newFaces.push([v1, v2, v3]);
+                        }
+                        faces = newFaces;
+                    }
+
+                    let numVerts = verts.length * 3;
+                    let numFaces = faces.length * 3;
+
+                    this.vertices = new Float32Array(numVerts);
+                    this.triangles = new Float32Array(numFaces);
+
+                    for (let i = 0; i < verts.length; i ++) {
+                        this.vertices[i * 3 + 0] = verts[i].x;
+                        this.vertices[i * 3 + 1] = verts[i].y;
+                        this.vertices[i * 3 + 2] = verts[i].z;
+                    }
+
+                    for (let j = 0; j < faces.length; j ++) {
+                        this.triangles[j * 3 + 0] = faces[j][0];
+                        this.triangles[j * 3 + 1] = faces[j][1];
+                        this.triangles[j * 3 + 2] = faces[j][2];
+                    }
+
+                    verts = [];
+                    faces = [];
+                    mpCache = {};
+                },
+
+                setBuffers () {
+                    gl.bindVertexArray(this.vao);
+
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
+                    gl.bufferData(gl.ARRAY_BUFFER, this.vertices, gl.STATIC_DRAW);
+
+                    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.triangleBuffer);
+                    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.triangles, gl.STATIC_DRAW);
+                },
+
+                render () {
+                    gl.useProgram(terrain.program);
+                    gl.bindVertexArray(this.vao);
+                    gl.drawElements(gl.TRIANGLES, this.triangles.length, gl.FLOAT, 0);
+                },
+            };
+
+            planet.initialize();
+            planet.generateMesh();
+            planet.setBuffers();
+
+            console.log(planet.vertices);
+            console.log(planet.triangles);
+
+            const player = {
+                x: 0, y: 0, z: -10,
+                pitch: 0, yaw: 0,
+                FOV: Math.PI * 0.5,
+                zNear: 0.1, zFar: 250,
+                calculateMatrix () {
+                    this.projectionMatrix = mat4.create();
+                    const aspect = globWidth / globHeight;
+                    mat4.perspective(this.projectionMatrix, this.FOV, aspect, this.zNear, this.zFar);
+                    mat4.rotate(this.projectionMatrix, this.projectionMatrix, this.pitch, [1, 0, 0]);
+                    mat4.rotate(this.projectionMatrix, this.projectionMatrix, this.yaw, [0, 1, 0]);
+                    mat4.translate(this.projectionMatrix, this.projectionMatrix, [-this.x, -this.y, -this.z]);
+
+                    gl.uniformMatrix4fv(terrain.uniformLocations.u_projection, false, this.projectionMatrix);
+                },
+            };
+
+            player.calculateMatrix();
+
+            planet.render();
+
+            function render () {
+
+
+
+            }
+
+            requestAnimationFrame(render);
+        }
+
+        function createShader (gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+
+            const success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+            if (success) return shader;
+
+            console.log(gl.getShaderInfoLog(shader));
+            gl.deleteShader(shader);
+        }
+
+        function createProgram (gl, vertexId, fragmentId) {
+            const vsSource = document.getElementById(vertexId).text.trim();
+            const fsSource = document.getElementById(fragmentId).text.trim();
+
+            const vertexShader = createShader(gl, gl.VERTEX_SHADER, vsSource);
+            const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+
+            const program = gl.createProgram();
+            gl.attachShader(program, vertexShader);
+            gl.attachShader(program, fragmentShader);
+            gl.linkProgram(program);
+
+            const success = gl.getProgramParameter(program, gl.LINK_STATUS);
+            if (success) return program;
+
+            console.log(gl.getProgramInfoLog(program));
+            gl.deleteProgram(program);
+        }
+
+        function vec3 (x, y, z) {
+            return {x: x, y: y, z: z};
+        }
+
+        function nvec3 (x, y, z) {
+            let l = 1.0 / Math.sqrt(x * x + y * y + z * z);
+            return {x: x * l, y: y * l, z: z * l};
+        }
+
+        function midpoint (v1, v2) {
+            return {
+                x: v1.x * 0.5 + v2.x * 0.5,
+                y: v1.y * 0.5 + v2.y * 0.5,
+                z: v1.z * 0.5 + v2.z * 0.5
+            };
+        }
+
+        main();
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,1187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>webgl2 test</title>
+    <style>
+        * {
+            overflow: hidden;
+            padding: 0px;
+            margin: 0px;
+        }
+        canvas {
+            position: fixed;
+            top: 0px;
+            left: 0px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gl-output"></canvas>
+    <canvas id="ui-output"></canvas>
+
+    <!-- WebGL helper library -->
+    <script src="./webgl2-utils.js"></script>
+
+    <!-- 4x4 Matrix library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/2.8.1/gl-matrix-min.js"></script>
+
+    <!-- Vertex shader -->
+    <script type="text/glsl" id="color.vsh">
+        #version 300 es
+
+        in vec4 a_position;
+        in vec4 a_color;
+        in vec4 a_normal;
+
+        uniform mat4 u_matrix;
+        uniform mat4 m_matrix;
+
+        out vec4 v_position;
+        out float v_light;
+        out vec4 v_color;
+
+        vec3 lightDirection = normalize(vec3(1.0, -1.0, 1.0));
+
+        void main () {
+            v_position = a_position;
+            v_color = a_color;
+            v_light = max(-dot(lightDirection, a_normal.xyz), 0.0);
+            gl_Position = u_matrix * m_matrix * a_position;
+        }
+    </script>
+
+    <!-- Fragment shader -->
+    <script type="text/glsl" id="color.fsh">
+        #version 300 es
+
+        precision highp float;
+
+        in vec4 v_position;
+        in float v_light;
+        in vec4 v_color;
+
+        out vec4 outColor;
+
+        void main () {
+            outColor = vec4(v_color.xyz * v_light, 1.0);
+        }
+    </script>
+
+    <!-- Pixel vertex shader -->
+    <script type="text/glsl" id="pixel.vsh">
+        #version 300 es
+        in vec4 a_position;
+        void main () {
+            gl_Position = a_position;
+        }
+    </script>
+
+    <!-- Terrain generation fragment shader -->
+    <script type="text/glsl" id="terrain-gen.fsh">
+        #version 300 es
+        precision highp float;
+
+        uniform vec3 u_offset;
+        uniform int u_size;
+
+        out vec4 outColor;
+
+        // https://github.com/ashima/webgl-noise/blob/master/src/noise3D.glsl
+        vec3 mod289(vec3 x) {
+            return x - floor(x * (1.0 / 289.0)) * 289.0;
+        }
+        vec4 mod289(vec4 x) {
+            return x - floor(x * (1.0 / 289.0)) * 289.0;
+        }
+        vec4 permute(vec4 x) {
+            return mod289(((x*34.0)+1.0)*x);
+        }
+        vec4 taylorInvSqrt(vec4 r) {
+            return 1.79284291400159 - 0.85373472095314 * r;
+        }
+        float snoise(vec3 v) {
+            const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
+            const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+
+            // First corner
+            vec3 i  = floor(v + dot(v, C.yyy) );
+            vec3 x0 =   v - i + dot(i, C.xxx) ;
+
+            // Other corners
+            vec3 g = step(x0.yzx, x0.xyz);
+            vec3 l = 1.0 - g;
+            vec3 i1 = min( g.xyz, l.zxy );
+            vec3 i2 = max( g.xyz, l.zxy );
+
+            vec3 x1 = x0 - i1 + C.xxx;
+            vec3 x2 = x0 - i2 + C.yyy;
+            vec3 x3 = x0 - D.yyy;
+
+            // Permutations
+            i = mod289(i);
+            vec4 p = permute( permute( permute(
+                  i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
+                + i.y + vec4(0.0, i1.y, i2.y, 1.0 ))
+                + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
+
+            // Gradients: 7x7 points over a square, mapped onto an octahedron.
+            // The ring size 17*17 = 289 is close to a multiple of 49 (49*6 = 294)
+            float n_ = 0.142857142857; // 1.0/7.0
+            vec3  ns = n_ * D.wyz - D.xzx;
+
+            vec4 j = p - 49.0 * floor(p * ns.z * ns.z);  //  mod(p,7*7)
+
+            vec4 x_ = floor(j * ns.z);
+            vec4 y_ = floor(j - 7.0 * x_ );    // mod(j,N)
+
+            vec4 x = x_ *ns.x + ns.yyyy;
+            vec4 y = y_ *ns.x + ns.yyyy;
+            vec4 h = 1.0 - abs(x) - abs(y);
+
+            vec4 b0 = vec4( x.xy, y.xy );
+            vec4 b1 = vec4( x.zw, y.zw );
+
+            vec4 s0 = floor(b0)*2.0 + 1.0;
+            vec4 s1 = floor(b1)*2.0 + 1.0;
+            vec4 sh = -step(h, vec4(0.0));
+
+            vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
+            vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
+
+            vec3 p0 = vec3(a0.xy,h.x);
+            vec3 p1 = vec3(a0.zw,h.y);
+            vec3 p2 = vec3(a1.xy,h.z);
+            vec3 p3 = vec3(a1.zw,h.w);
+
+            //Normalise gradients
+            vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
+            p0 *= norm.x;
+            p1 *= norm.y;
+            p2 *= norm.z;
+            p3 *= norm.w;
+
+            // Mix final noise value
+            vec4 m = max(0.5 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+            m = m * m;
+            return 105.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1),
+                    dot(p2,x2), dot(p3,x3) ) );
+        }
+
+        const int OCTAVES = 4;
+        float noise (vec3 p) {
+            float scl = 1.0;
+            float sum = 0.0;
+            for (int i = 0; i < OCTAVES; i ++) {
+                sum += snoise(p * scl) / scl;
+                scl *= 2.0;
+            }
+            return sum;
+        }
+
+        void main () {
+            vec2 v = sin(gl_FragCoord.xy * 0.01) * 0.25 + 0.5 + cos(gl_FragCoord.xy * 0.001) * 0.25;
+
+            vec3 pos = vec3(
+                mod(gl_FragCoord.x, float(u_size + 1)),
+                gl_FragCoord.y,
+                floor(gl_FragCoord.x / float(u_size + 1))
+            ) + u_offset;
+
+            float n = noise(pos * 0.05) - 0.5;
+
+            outColor = vec4(n + 0.5, n, n, n);
+        }
+    </script>
+
+    <!-- Main javascript file -->
+    <script type="application/javascript" id="marching-cubes.js">
+
+        // Get the width and height of the canvas
+        var globWidth = window.innerWidth;
+        var globHeight = window.innerHeight;
+        function MarchingCubes () {
+            /** @type {HTMLCanvasElement} */
+            const ctxCanvas = getCanvas("ui-output", globWidth, globHeight);
+
+            /** @type {HTMLCanvasElement}  */
+            const canvas = getCanvas("gl-output", globWidth, globHeight);
+
+            /* Constants */
+            const CHUNK_SIZE = 16;
+            const INTERPOLATION = true;
+            const RENDER_DISTANCE = 200;
+            const ISO_LEVEL = 0.0;
+            const FLAT_SHADING = true;
+            const PLAYER_SPEED = 0.25;
+            const SCALE = 1.0;
+            const OFFSET = vec3.fromValues(0, 0, 0);
+
+            /* Holds environment variables */
+            const environment = {
+                clock: 0.0,
+                lightDirection: vec3.fromValues(0.0, 1.0, 0.0)
+            };
+
+            /* Handles input */
+            const input = {
+                mouseX: 0, mouseY: 0,
+                movementX: 0, movementY: 0,
+                mouseDown: false, mouseButton: 0, mouseLocked: false,
+                keys: {},
+                initialize () {
+                    let self = this;
+                    ctxCanvas.onmousedown = function (e) {
+                        self.mouseButton = e.button;
+                        self.mouseDown = true;
+
+                        if (!self.mouseLocked) {
+                            if (ctxCanvas.requestPointerLock) {
+                                ctxCanvas.requestPointerLock();
+                                self.mouseLocked = true;
+                            } else if (ctxCanvas.mozRequestPointerLock) {
+                                ctxCanvas.mozRequestPointerLock();
+                                self.mouseLocked = true;
+                            } else if (ctxCanvas.webkitRequestPointerLock) {
+                                ctxCanvas.webkitRequestPointerLock();
+                                self.mouseLocked = true;
+                            }
+                        }
+
+                    };
+                    ctxCanvas.onmouseup = function (e) {
+                        self.mouseDown = false;
+                    }
+                    ctxCanvas.onmousemove = function (e) {
+                        self.mouseX = e.x;
+                        self.mouseY = e.y;
+                        self.movementX += e.movementX;
+                        self.movementY += e.movementY;
+                    };
+                    document.onkeydown = function (e) {
+                        self.keys[e.key.toLowerCase()] = true;
+                    };
+                    document.onkeyup = function (e) {
+                        self.keys[e.key.toLowerCase()] = false;
+                    };
+                },
+                update () {
+                    this.movementX = 0;
+                    this.movementY = 0;
+                }
+            };
+
+            /* Handles statistics */
+            const statistics = {
+                deltaTime: 0.0,
+                lastTime: 0.0,
+                currentTime: 0.0,
+                lastFrameTime: 0.0,
+                fps: 60.0,
+                chunksRendered: 0,
+                update(now) {
+                    this.currentTime = now;
+                    this.deltaTime = this.currentTime - this.lastTime;
+                    this.lastTime = this.currentTime;
+
+                    if (now - this.lastFrameTime > 1000) {
+                        this.fps = 1000.0 / this.deltaTime;
+                        this.lastFrameTime = now;
+                    }
+                }
+            };
+
+            /* Get CanvasRenderingContext2D */
+            const ctx = ctxCanvas.getContext("2d");
+
+            /* Get WebGL2RenderingContext */
+            const gl = canvas.getContext("webgl2");
+
+            /* Create shader program */
+            const program = createProgramObject(gl, "color.vsh", "color.fsh");
+
+            /* Create terrain generation program */
+            const terrainGen = {
+                program: createProgramObject(gl, "pixel.vsh", "terrain-gen.fsh"),
+                initialize () {
+                    console.log(this.program);
+                    gl.useProgram(this.program.program);
+                    gl.uniform1i(this.program.uniformLocations.u_size.location, CHUNK_SIZE);
+
+                    this.vertexArray = gl.createVertexArray();
+                    gl.bindVertexArray(this.vertexArray);
+                    this.program.enableAttributes();
+                    this.positionBuffer = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+                    gl.vertexAttribPointer(this.program.attribLocations.a_position.location, 2, gl.FLOAT, false, 0, 0);
+                    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                        -1, -1, -1, 1, 1, -1, 1, 1
+                    ]), gl.STATIC_DRAW);
+                    gl.bindVertexArray(null);
+
+                    this.framebuffer = gl.createFramebuffer();
+
+                    this.colorTexture = gl.createTexture();
+                    const n = CHUNK_SIZE + 1;
+                    let texWidth = n * n;
+                    let texHeight = n;
+                    gl.bindTexture(gl.TEXTURE_2D, this.colorTexture);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, texWidth, texHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, terrainGen.framebuffer);
+                    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.colorTexture, 0);
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                },
+                setOffset (x, y, z) {
+                    gl.useProgram(this.program.program);
+                    gl.uniform3f(this.program.uniformLocations.u_offset.location, x, y, z);
+                },
+                render () {
+                    gl.useProgram(this.program.program);
+                    gl.bindVertexArray(this.vertexArray);
+                    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+                    gl.bindVertexArray(null);
+                },
+            };
+
+            /* Handles camera */
+            const camera = {
+                x: CHUNK_SIZE / 2, y: CHUNK_SIZE / 2, z: CHUNK_SIZE * 2,
+                pitch: -0.0,
+                yaw: -0.0,
+                FOV: Math.PI * 0.50,
+                zNear: 0.3,
+                zFar: 100.0,
+                sensitivity: 1.0,
+                constructMatrix() {
+                    this.projectionMatrix = mat4.create();
+                    const aspect = globWidth / globHeight;
+                    mat4.perspective(this.projectionMatrix, this.FOV, aspect, this.zNear, this.zFar);
+                    mat4.rotate(this.projectionMatrix, this.projectionMatrix, this.pitch, [1, 0, 0]);
+                    mat4.rotate(this.projectionMatrix, this.projectionMatrix, this.yaw, [0, 1, 0]);
+                    mat4.translate(this.projectionMatrix, this.projectionMatrix, [-this.x, -this.y, -this.z]);
+                },
+
+                setMatrix() {
+                    gl.uniformMatrix4fv(program.uniformLocations.u_matrix.location, false, camera.projectionMatrix);
+                },
+
+                controls() {
+                    this.pitch += input.movementY * 0.001 * this.sensitivity;
+                    this.yaw += input.movementX * 0.001 * this.sensitivity;
+
+                    if (input.keys.w) {
+                        this.x += Math.sin(this.yaw) * PLAYER_SPEED;
+                        this.z -= Math.cos(this.yaw) * PLAYER_SPEED;
+                    }
+
+                    if (input.keys.s) {
+                        this.x -= Math.sin(this.yaw) * PLAYER_SPEED;
+                        this.z += Math.cos(this.yaw) * PLAYER_SPEED;
+                    }
+
+                    if (input.keys.d) {
+                        this.x += Math.cos(this.yaw) * PLAYER_SPEED;
+                        this.z += Math.sin(this.yaw) * PLAYER_SPEED;
+                    }
+
+                    if (input.keys.a) {
+                        this.x -= Math.cos(this.yaw) * PLAYER_SPEED;
+                        this.z -= Math.sin(this.yaw) * PLAYER_SPEED;
+                    }
+
+                    if (input.keys[" "])
+                        this.y += PLAYER_SPEED;
+
+                    if (input.keys.shift)
+                        this.y -= PLAYER_SPEED;
+                },
+                control2() {
+                    if (input.mouseDown) {
+
+                        this.yaw += input.movementX * 0.005 * this.sensitivity;
+
+                    }
+                    this.x = Math.cos(this.yaw + Math.PI / 2) * CHUNK_SIZE * 1.5;
+                    this.y = 0.0;
+                    this.z = Math.sin(this.yaw + Math.PI / 2) * CHUNK_SIZE * 1.5;
+                },
+            };
+
+            /* https://github.com/blindman67/SimplexNoiseJS  */
+            function openSimplexNoise(clientSeed) {
+                const SQ4 = 2
+                const toNums = (s) => s.split(",").map((s) => new Uint8Array(s.split("").map((v) => Number(v) )) );
+                const decode = (m, r, s) => new Int8Array(s.split("").map((v) => parseInt(v, r) + m ));
+                const toNumsB32 = (s) => s.split(",").map((s) => parseInt(s, 32));
+                const NORM_3D = 1.0 / 206.0
+                const SQUISH_3D = 1 / 3
+                const STRETCH_3D = -1 / 6
+                let base3D = toNums("0000110010101001,2110210120113111,110010101001211021012011")
+                const gradients3D = decode(-11, 23, "0ff7mf7fmmfffmfffm07f70f77mm7ff0ff7m0f77m77f0mf7fm7ff0077707770m77f07f70")
+                let lookupPairs3D = function() { return new Uint16Array(toNumsB32("0,2,1,1,2,2,5,1,6,0,7,0,10,2,12,2,41,1,45,1,50,5,51,5,g6,0,g7,0,h2,4,h6,4,k5,3,k7,3,l0,5,l1,5,l2,4,l5,3,l6,4,l7,3,l8,d,l9,d,la,c,ld,e,le,c,lf,e,m8,k,ma,i,p9,l,pd,n,q8,k,q9,l,15e,j,15f,m,16a,i,16e,j,19d,n,19f,m,1a8,f,1a9,h,1aa,f,1ad,h,1ae,g,1af,g,1ag,b,1ah,a,1ai,b,1al,a,1am,9,1an,9,1bg,b,1bi,b,1eh,a,1el,a,1fg,8,1fh,8,1qm,9,1qn,9,1ri,7,1rm,7,1ul,6,1un,6,1vg,8,1vh,8,1vi,7,1vl,6,1vm,7,1vn,6")) }
+                let p3D = decode(-1, 5, "112011210110211120110121102132212220132122202131222022243214231243124213241324123222113311221213131221123113311112202311112022311112220342223113342223311342223131322023113322023311320223113320223131322203311322203131")
+                const setOf = function(count) { let a = [],i = 0; while (i < count) { a.push(i++) } return a }
+                const doFor = function(count, cb) { let i = 0; while (i < count && cb(i++) !== true) {} }
+
+                function shuffleSeed(seed,count){
+                    seed = seed * 1664525 + 1013904223 | 0
+                    count -= 1
+                    return count > 0 ? shuffleSeed(seed, count) : seed
+                }
+                const types = {
+                    _3D : {
+                        base : base3D,
+                        squish : SQUISH_3D,
+                        dimensions : 3,
+                        pD : p3D,
+                        lookup : lookupPairs3D,
+                    }
+                }
+
+                function createContribution(type, baseSet, index) {
+                    let i = 0
+                    const multiplier = baseSet[index ++]
+                    const c = { next : undefined }
+                    while(i < type.dimensions) {
+                        const axis = ("xyzw")[i]
+                        c[axis + "sb"] = baseSet[index + i]
+                        c["d" + axis] = - baseSet[index + i++] - multiplier * type.squish
+                    }
+                    return c
+                }
+
+                function createLookupPairs(lookupArray, contributions){
+                    let i
+                    const a = lookupArray()
+                    const res = new Map()
+                    for (i = 0; i < a.length; i += 2) { res.set(a[i], contributions[a[i + 1]]); }
+                    return res
+                }
+
+                function createContributionArray(type) {
+                    const conts = []
+                    const d = type.dimensions
+                    const baseStep = d * d
+                    let k, i = 0
+                    while (i < type.pD.length) {
+                        const baseSet = type.base[type.pD[i]]
+                        let previous, current
+                        k = 0
+                        do {
+                            current = createContribution(type, baseSet, k)
+                            if (!previous) conts[i / baseStep] = current;
+                            else previous.next = current;
+                            previous = current
+                            k += d + 1
+                        } while(k < baseSet.length)
+
+                        current.next = createContribution(type, type.pD, i + 1)
+                        if (d >= 3) current.next.next = createContribution(type, type.pD, i + d + 2);
+                        if (d === 4) current.next.next.next = createContribution(type, type.pD, i + 11);
+                        i += baseStep
+                    }
+                    const result = [conts, createLookupPairs(type.lookup, conts)]
+                    type.base = undefined
+                    type.lookup = undefined
+                    return result
+                }
+
+                let temp = createContributionArray(types._3D)
+                const contributions3D = temp[0], lookup3D = temp[1]
+                const perm = new Uint8Array(256)
+                const perm3D = new Uint8Array(256)
+                const source = new Uint8Array(setOf(256))
+                let seed = shuffleSeed(clientSeed, 3)
+                doFor(256, function(i) {
+                    i = 255 - i
+                    seed = shuffleSeed(seed, 1)
+                    let r = (seed + 31) % (i + 1)
+                    r += r < 0 ? i + 1 : 0
+                    perm[i] = source[r]
+                    perm3D[i] = (perm[i] % 24) * 3
+                    source[r] = source[i]
+                })
+                base3D = undefined
+                lookupPairs3D = undefined
+                p3D = undefined
+
+                return function(x, y, z) {
+                    const pD = perm3D
+                    const p = perm
+                    const g = gradients3D
+                    const stretchOffset = (x + y + z) * STRETCH_3D
+                    const xs = x + stretchOffset, ys = y + stretchOffset, zs = z + stretchOffset
+                    const xsb = Math.floor(xs), ysb = Math.floor(ys), zsb = Math.floor(zs)
+                    const squishOffset	= (xsb + ysb + zsb) * SQUISH_3D
+                    const dx0 = x - (xsb + squishOffset), dy0 = y - (ysb + squishOffset), dz0 = z - (zsb + squishOffset)
+                    const xins = xs - xsb, yins = ys - ysb, zins = zs - zsb
+                    const inSum = xins + yins + zins
+                    let c = lookup3D.get(
+                        (yins - zins + 1) |
+                        ((xins - yins + 1) << 1) |
+                        ((xins - zins + 1) << 2) |
+                        (inSum << 3) |
+                        ((inSum + zins) << 5) |
+                        ((inSum + yins) << 7) |
+                        ((inSum + xins) << 9)
+                    )
+                    let i, value = 0
+                    while (c !== undefined) {
+                        const dx = dx0 + c.dx, dy = dy0 + c.dy, dz = dz0 + c.dz
+                        let attn = 2 - dx * dx - dy * dy - dz * dz
+                        if (attn > 0) {
+                            i = pD[(((p[(xsb + c.xsb) & 0xFF] + (ysb + c.ysb)) & 0xFF) + (zsb + c.zsb)) & 0xFF]
+                            attn *= attn
+                            value += attn * attn * (g[i++] * dx + g[i++] * dy + g[i] * dz)
+                        }
+                        c = c.next
+                    }
+                    return value * NORM_3D + 0.5
+                }
+            }
+            const simplexNoise = openSimplexNoise(0);
+
+            /* Noise function */
+            function noise (x, y, z, octaves=4) {
+                let scl = 1;
+                let v = 0;
+                for (let i = 0; i < octaves; i ++) {
+                    v += simplexNoise(x * scl, y * scl, z * scl) / scl * 0.5;
+                    scl *= 2;
+                }
+                return v;
+            }
+
+            /* Lookup tables */
+            const lookup = {
+                triTable: [
+                    [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 8, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 1, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 8, 3, 9, 8, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 2, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 8, 3, 1, 2, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 2, 10, 0, 2, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [2, 8, 3, 2, 10, 8, 10, 9, 8, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 11, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 11, 2, 8, 11, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 9, 0, 2, 3, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 11, 2, 1, 9, 11, 9, 8, 11, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 10, 1, 11, 10, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 10, 1, 0, 8, 10, 8, 11, 10, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 9, 0, 3, 11, 9, 11, 10, 9, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 8, 10, 10, 8, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [4, 7, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [4, 3, 0, 7, 3, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 1, 9, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [4, 1, 9, 4, 7, 1, 7, 3, 1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 2, 10, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 4, 7, 3, 0, 4, 1, 2, 10, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 2, 10, 9, 0, 2, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1],
+                    [2, 10, 9, 2, 9, 7, 2, 7, 3, 7, 9, 4, -1, -1, -1, -1],
+                    [8, 4, 7, 3, 11, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [11, 4, 7, 11, 2, 4, 2, 0, 4, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 0, 1, 8, 4, 7, 2, 3, 11, -1, -1, -1, -1, -1, -1, -1],
+                    [4, 7, 11, 9, 4, 11, 9, 11, 2, 9, 2, 1, -1, -1, -1, -1],
+                    [3, 10, 1, 3, 11, 10, 7, 8, 4, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 11, 10, 1, 4, 11, 1, 0, 4, 7, 11, 4, -1, -1, -1, -1],
+                    [4, 7, 8, 9, 0, 11, 9, 11, 10, 11, 0, 3, -1, -1, -1, -1],
+                    [4, 7, 11, 4, 11, 9, 9, 11, 10, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 5, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 5, 4, 0, 8, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 5, 4, 1, 5, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [8, 5, 4, 8, 3, 5, 3, 1, 5, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 2, 10, 9, 5, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 0, 8, 1, 2, 10, 4, 9, 5, -1, -1, -1, -1, -1, -1, -1],
+                    [5, 2, 10, 5, 4, 2, 4, 0, 2, -1, -1, -1, -1, -1, -1, -1],
+                    [2, 10, 5, 3, 2, 5, 3, 5, 4, 3, 4, 8, -1, -1, -1, -1],
+                    [9, 5, 4, 2, 3, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 11, 2, 0, 8, 11, 4, 9, 5, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 5, 4, 0, 1, 5, 2, 3, 11, -1, -1, -1, -1, -1, -1, -1],
+                    [2, 1, 5, 2, 5, 8, 2, 8, 11, 4, 8, 5, -1, -1, -1, -1],
+                    [10, 3, 11, 10, 1, 3, 9, 5, 4, -1, -1, -1, -1, -1, -1, -1],
+                    [4, 9, 5, 0, 8, 1, 8, 10, 1, 8, 11, 10, -1, -1, -1, -1],
+                    [5, 4, 0, 5, 0, 11, 5, 11, 10, 11, 0, 3, -1, -1, -1, -1],
+                    [5, 4, 8, 5, 8, 10, 10, 8, 11, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 7, 8, 5, 7, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 3, 0, 9, 5, 3, 5, 7, 3, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 7, 8, 0, 1, 7, 1, 5, 7, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 5, 3, 3, 5, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 7, 8, 9, 5, 7, 10, 1, 2, -1, -1, -1, -1, -1, -1, -1],
+                    [10, 1, 2, 9, 5, 0, 5, 3, 0, 5, 7, 3, -1, -1, -1, -1],
+                    [8, 0, 2, 8, 2, 5, 8, 5, 7, 10, 5, 2, -1, -1, -1, -1],
+                    [2, 10, 5, 2, 5, 3, 3, 5, 7, -1, -1, -1, -1, -1, -1, -1],
+                    [7, 9, 5, 7, 8, 9, 3, 11, 2, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 5, 7, 9, 7, 2, 9, 2, 0, 2, 7, 11, -1, -1, -1, -1],
+                    [2, 3, 11, 0, 1, 8, 1, 7, 8, 1, 5, 7, -1, -1, -1, -1],
+                    [11, 2, 1, 11, 1, 7, 7, 1, 5, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 5, 8, 8, 5, 7, 10, 1, 3, 10, 3, 11, -1, -1, -1, -1],
+                    [5, 7, 0, 5, 0, 9, 7, 11, 0, 1, 0, 10, 11, 10, 0, -1],
+                    [11, 10, 0, 11, 0, 3, 10, 5, 0, 8, 0, 7, 5, 7, 0, -1],
+                    [11, 10, 5, 7, 11, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [10, 6, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 8, 3, 5, 10, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 0, 1, 5, 10, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 8, 3, 1, 9, 8, 5, 10, 6, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 6, 5, 2, 6, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 6, 5, 1, 2, 6, 3, 0, 8, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 6, 5, 9, 0, 6, 0, 2, 6, -1, -1, -1, -1, -1, -1, -1],
+                    [5, 9, 8, 5, 8, 2, 5, 2, 6, 3, 2, 8, -1, -1, -1, -1],
+                    [2, 3, 11, 10, 6, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [11, 0, 8, 11, 2, 0, 10, 6, 5, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 1, 9, 2, 3, 11, 5, 10, 6, -1, -1, -1, -1, -1, -1, -1],
+                    [5, 10, 6, 1, 9, 2, 9, 11, 2, 9, 8, 11, -1, -1, -1, -1],
+                    [6, 3, 11, 6, 5, 3, 5, 1, 3, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 8, 11, 0, 11, 5, 0, 5, 1, 5, 11, 6, -1, -1, -1, -1],
+                    [3, 11, 6, 0, 3, 6, 0, 6, 5, 0, 5, 9, -1, -1, -1, -1],
+                    [6, 5, 9, 6, 9, 11, 11, 9, 8, -1, -1, -1, -1, -1, -1, -1],
+                    [5, 10, 6, 4, 7, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [4, 3, 0, 4, 7, 3, 6, 5, 10, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 9, 0, 5, 10, 6, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1],
+                    [10, 6, 5, 1, 9, 7, 1, 7, 3, 7, 9, 4, -1, -1, -1, -1],
+                    [6, 1, 2, 6, 5, 1, 4, 7, 8, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 2, 5, 5, 2, 6, 3, 0, 4, 3, 4, 7, -1, -1, -1, -1],
+                    [8, 4, 7, 9, 0, 5, 0, 6, 5, 0, 2, 6, -1, -1, -1, -1],
+                    [7, 3, 9, 7, 9, 4, 3, 2, 9, 5, 9, 6, 2, 6, 9, -1],
+                    [3, 11, 2, 7, 8, 4, 10, 6, 5, -1, -1, -1, -1, -1, -1, -1],
+                    [5, 10, 6, 4, 7, 2, 4, 2, 0, 2, 7, 11, -1, -1, -1, -1],
+                    [0, 1, 9, 4, 7, 8, 2, 3, 11, 5, 10, 6, -1, -1, -1, -1],
+                    [9, 2, 1, 9, 11, 2, 9, 4, 11, 7, 11, 4, 5, 10, 6, -1],
+                    [8, 4, 7, 3, 11, 5, 3, 5, 1, 5, 11, 6, -1, -1, -1, -1],
+                    [5, 1, 11, 5, 11, 6, 1, 0, 11, 7, 11, 4, 0, 4, 11, -1],
+                    [0, 5, 9, 0, 6, 5, 0, 3, 6, 11, 6, 3, 8, 4, 7, -1],
+                    [6, 5, 9, 6, 9, 11, 4, 7, 9, 7, 11, 9, -1, -1, -1, -1],
+                    [10, 4, 9, 6, 4, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [4, 10, 6, 4, 9, 10, 0, 8, 3, -1, -1, -1, -1, -1, -1, -1],
+                    [10, 0, 1, 10, 6, 0, 6, 4, 0, -1, -1, -1, -1, -1, -1, -1],
+                    [8, 3, 1, 8, 1, 6, 8, 6, 4, 6, 1, 10, -1, -1, -1, -1],
+                    [1, 4, 9, 1, 2, 4, 2, 6, 4, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 0, 8, 1, 2, 9, 2, 4, 9, 2, 6, 4, -1, -1, -1, -1],
+                    [0, 2, 4, 4, 2, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [8, 3, 2, 8, 2, 4, 4, 2, 6, -1, -1, -1, -1, -1, -1, -1],
+                    [10, 4, 9, 10, 6, 4, 11, 2, 3, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 8, 2, 2, 8, 11, 4, 9, 10, 4, 10, 6, -1, -1, -1, -1],
+                    [3, 11, 2, 0, 1, 6, 0, 6, 4, 6, 1, 10, -1, -1, -1, -1],
+                    [6, 4, 1, 6, 1, 10, 4, 8, 1, 2, 1, 11, 8, 11, 1, -1],
+                    [9, 6, 4, 9, 3, 6, 9, 1, 3, 11, 6, 3, -1, -1, -1, -1],
+                    [8, 11, 1, 8, 1, 0, 11, 6, 1, 9, 1, 4, 6, 4, 1, -1],
+                    [3, 11, 6, 3, 6, 0, 0, 6, 4, -1, -1, -1, -1, -1, -1, -1],
+                    [6, 4, 8, 11, 6, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [7, 10, 6, 7, 8, 10, 8, 9, 10, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 7, 3, 0, 10, 7, 0, 9, 10, 6, 7, 10, -1, -1, -1, -1],
+                    [10, 6, 7, 1, 10, 7, 1, 7, 8, 1, 8, 0, -1, -1, -1, -1],
+                    [10, 6, 7, 10, 7, 1, 1, 7, 3, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 2, 6, 1, 6, 8, 1, 8, 9, 8, 6, 7, -1, -1, -1, -1],
+                    [2, 6, 9, 2, 9, 1, 6, 7, 9, 0, 9, 3, 7, 3, 9, -1],
+                    [7, 8, 0, 7, 0, 6, 6, 0, 2, -1, -1, -1, -1, -1, -1, -1],
+                    [7, 3, 2, 6, 7, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [2, 3, 11, 10, 6, 8, 10, 8, 9, 8, 6, 7, -1, -1, -1, -1],
+                    [2, 0, 7, 2, 7, 11, 0, 9, 7, 6, 7, 10, 9, 10, 7, -1],
+                    [1, 8, 0, 1, 7, 8, 1, 10, 7, 6, 7, 10, 2, 3, 11, -1],
+                    [11, 2, 1, 11, 1, 7, 10, 6, 1, 6, 7, 1, -1, -1, -1, -1],
+                    [8, 9, 6, 8, 6, 7, 9, 1, 6, 11, 6, 3, 1, 3, 6, -1],
+                    [0, 9, 1, 11, 6, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [7, 8, 0, 7, 0, 6, 3, 11, 0, 11, 6, 0, -1, -1, -1, -1],
+                    [7, 11, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [7, 6, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 0, 8, 11, 7, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 1, 9, 11, 7, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [8, 1, 9, 8, 3, 1, 11, 7, 6, -1, -1, -1, -1, -1, -1, -1],
+                    [10, 1, 2, 6, 11, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 2, 10, 3, 0, 8, 6, 11, 7, -1, -1, -1, -1, -1, -1, -1],
+                    [2, 9, 0, 2, 10, 9, 6, 11, 7, -1, -1, -1, -1, -1, -1, -1],
+                    [6, 11, 7, 2, 10, 3, 10, 8, 3, 10, 9, 8, -1, -1, -1, -1],
+                    [7, 2, 3, 6, 2, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [7, 0, 8, 7, 6, 0, 6, 2, 0, -1, -1, -1, -1, -1, -1, -1],
+                    [2, 7, 6, 2, 3, 7, 0, 1, 9, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 6, 2, 1, 8, 6, 1, 9, 8, 8, 7, 6, -1, -1, -1, -1],
+                    [10, 7, 6, 10, 1, 7, 1, 3, 7, -1, -1, -1, -1, -1, -1, -1],
+                    [10, 7, 6, 1, 7, 10, 1, 8, 7, 1, 0, 8, -1, -1, -1, -1],
+                    [0, 3, 7, 0, 7, 10, 0, 10, 9, 6, 10, 7, -1, -1, -1, -1],
+                    [7, 6, 10, 7, 10, 8, 8, 10, 9, -1, -1, -1, -1, -1, -1, -1],
+                    [6, 8, 4, 11, 8, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 6, 11, 3, 0, 6, 0, 4, 6, -1, -1, -1, -1, -1, -1, -1],
+                    [8, 6, 11, 8, 4, 6, 9, 0, 1, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 4, 6, 9, 6, 3, 9, 3, 1, 11, 3, 6, -1, -1, -1, -1],
+                    [6, 8, 4, 6, 11, 8, 2, 10, 1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 2, 10, 3, 0, 11, 0, 6, 11, 0, 4, 6, -1, -1, -1, -1],
+                    [4, 11, 8, 4, 6, 11, 0, 2, 9, 2, 10, 9, -1, -1, -1, -1],
+                    [10, 9, 3, 10, 3, 2, 9, 4, 3, 11, 3, 6, 4, 6, 3, -1],
+                    [8, 2, 3, 8, 4, 2, 4, 6, 2, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 4, 2, 4, 6, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 9, 0, 2, 3, 4, 2, 4, 6, 4, 3, 8, -1, -1, -1, -1],
+                    [1, 9, 4, 1, 4, 2, 2, 4, 6, -1, -1, -1, -1, -1, -1, -1],
+                    [8, 1, 3, 8, 6, 1, 8, 4, 6, 6, 10, 1, -1, -1, -1, -1],
+                    [10, 1, 0, 10, 0, 6, 6, 0, 4, -1, -1, -1, -1, -1, -1, -1],
+                    [4, 6, 3, 4, 3, 8, 6, 10, 3, 0, 3, 9, 10, 9, 3, -1],
+                    [10, 9, 4, 6, 10, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [4, 9, 5, 7, 6, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 8, 3, 4, 9, 5, 11, 7, 6, -1, -1, -1, -1, -1, -1, -1],
+                    [5, 0, 1, 5, 4, 0, 7, 6, 11, -1, -1, -1, -1, -1, -1, -1],
+                    [11, 7, 6, 8, 3, 4, 3, 5, 4, 3, 1, 5, -1, -1, -1, -1],
+                    [9, 5, 4, 10, 1, 2, 7, 6, 11, -1, -1, -1, -1, -1, -1, -1],
+                    [6, 11, 7, 1, 2, 10, 0, 8, 3, 4, 9, 5, -1, -1, -1, -1],
+                    [7, 6, 11, 5, 4, 10, 4, 2, 10, 4, 0, 2, -1, -1, -1, -1],
+                    [3, 4, 8, 3, 5, 4, 3, 2, 5, 10, 5, 2, 11, 7, 6, -1],
+                    [7, 2, 3, 7, 6, 2, 5, 4, 9, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 5, 4, 0, 8, 6, 0, 6, 2, 6, 8, 7, -1, -1, -1, -1],
+                    [3, 6, 2, 3, 7, 6, 1, 5, 0, 5, 4, 0, -1, -1, -1, -1],
+                    [6, 2, 8, 6, 8, 7, 2, 1, 8, 4, 8, 5, 1, 5, 8, -1],
+                    [9, 5, 4, 10, 1, 6, 1, 7, 6, 1, 3, 7, -1, -1, -1, -1],
+                    [1, 6, 10, 1, 7, 6, 1, 0, 7, 8, 7, 0, 9, 5, 4, -1],
+                    [4, 0, 10, 4, 10, 5, 0, 3, 10, 6, 10, 7, 3, 7, 10, -1],
+                    [7, 6, 10, 7, 10, 8, 5, 4, 10, 4, 8, 10, -1, -1, -1, -1],
+                    [6, 9, 5, 6, 11, 9, 11, 8, 9, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 6, 11, 0, 6, 3, 0, 5, 6, 0, 9, 5, -1, -1, -1, -1],
+                    [0, 11, 8, 0, 5, 11, 0, 1, 5, 5, 6, 11, -1, -1, -1, -1],
+                    [6, 11, 3, 6, 3, 5, 5, 3, 1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 2, 10, 9, 5, 11, 9, 11, 8, 11, 5, 6, -1, -1, -1, -1],
+                    [0, 11, 3, 0, 6, 11, 0, 9, 6, 5, 6, 9, 1, 2, 10, -1],
+                    [11, 8, 5, 11, 5, 6, 8, 0, 5, 10, 5, 2, 0, 2, 5, -1],
+                    [6, 11, 3, 6, 3, 5, 2, 10, 3, 10, 5, 3, -1, -1, -1, -1],
+                    [5, 8, 9, 5, 2, 8, 5, 6, 2, 3, 8, 2, -1, -1, -1, -1],
+                    [9, 5, 6, 9, 6, 0, 0, 6, 2, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 5, 8, 1, 8, 0, 5, 6, 8, 3, 8, 2, 6, 2, 8, -1],
+                    [1, 5, 6, 2, 1, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 3, 6, 1, 6, 10, 3, 8, 6, 5, 6, 9, 8, 9, 6, -1],
+                    [10, 1, 0, 10, 0, 6, 9, 5, 0, 5, 6, 0, -1, -1, -1, -1],
+                    [0, 3, 8, 5, 6, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [10, 5, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [11, 5, 10, 7, 5, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [11, 5, 10, 11, 7, 5, 8, 3, 0, -1, -1, -1, -1, -1, -1, -1],
+                    [5, 11, 7, 5, 10, 11, 1, 9, 0, -1, -1, -1, -1, -1, -1, -1],
+                    [10, 7, 5, 10, 11, 7, 9, 8, 1, 8, 3, 1, -1, -1, -1, -1],
+                    [11, 1, 2, 11, 7, 1, 7, 5, 1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 8, 3, 1, 2, 7, 1, 7, 5, 7, 2, 11, -1, -1, -1, -1],
+                    [9, 7, 5, 9, 2, 7, 9, 0, 2, 2, 11, 7, -1, -1, -1, -1],
+                    [7, 5, 2, 7, 2, 11, 5, 9, 2, 3, 2, 8, 9, 8, 2, -1],
+                    [2, 5, 10, 2, 3, 5, 3, 7, 5, -1, -1, -1, -1, -1, -1, -1],
+                    [8, 2, 0, 8, 5, 2, 8, 7, 5, 10, 2, 5, -1, -1, -1, -1],
+                    [9, 0, 1, 5, 10, 3, 5, 3, 7, 3, 10, 2, -1, -1, -1, -1],
+                    [9, 8, 2, 9, 2, 1, 8, 7, 2, 10, 2, 5, 7, 5, 2, -1],
+                    [1, 3, 5, 3, 7, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 8, 7, 0, 7, 1, 1, 7, 5, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 0, 3, 9, 3, 5, 5, 3, 7, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 8, 7, 5, 9, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [5, 8, 4, 5, 10, 8, 10, 11, 8, -1, -1, -1, -1, -1, -1, -1],
+                    [5, 0, 4, 5, 11, 0, 5, 10, 11, 11, 3, 0, -1, -1, -1, -1],
+                    [0, 1, 9, 8, 4, 10, 8, 10, 11, 10, 4, 5, -1, -1, -1, -1],
+                    [10, 11, 4, 10, 4, 5, 11, 3, 4, 9, 4, 1, 3, 1, 4, -1],
+                    [2, 5, 1, 2, 8, 5, 2, 11, 8, 4, 5, 8, -1, -1, -1, -1],
+                    [0, 4, 11, 0, 11, 3, 4, 5, 11, 2, 11, 1, 5, 1, 11, -1],
+                    [0, 2, 5, 0, 5, 9, 2, 11, 5, 4, 5, 8, 11, 8, 5, -1],
+                    [9, 4, 5, 2, 11, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [2, 5, 10, 3, 5, 2, 3, 4, 5, 3, 8, 4, -1, -1, -1, -1],
+                    [5, 10, 2, 5, 2, 4, 4, 2, 0, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 10, 2, 3, 5, 10, 3, 8, 5, 4, 5, 8, 0, 1, 9, -1],
+                    [5, 10, 2, 5, 2, 4, 1, 9, 2, 9, 4, 2, -1, -1, -1, -1],
+                    [8, 4, 5, 8, 5, 3, 3, 5, 1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 4, 5, 1, 0, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [8, 4, 5, 8, 5, 3, 9, 0, 5, 0, 3, 5, -1, -1, -1, -1],
+                    [9, 4, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [4, 11, 7, 4, 9, 11, 9, 10, 11, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 8, 3, 4, 9, 7, 9, 11, 7, 9, 10, 11, -1, -1, -1, -1],
+                    [1, 10, 11, 1, 11, 4, 1, 4, 0, 7, 4, 11, -1, -1, -1, -1],
+                    [3, 1, 4, 3, 4, 8, 1, 10, 4, 7, 4, 11, 10, 11, 4, -1],
+                    [4, 11, 7, 9, 11, 4, 9, 2, 11, 9, 1, 2, -1, -1, -1, -1],
+                    [9, 7, 4, 9, 11, 7, 9, 1, 11, 2, 11, 1, 0, 8, 3, -1],
+                    [11, 7, 4, 11, 4, 2, 2, 4, 0, -1, -1, -1, -1, -1, -1, -1],
+                    [11, 7, 4, 11, 4, 2, 8, 3, 4, 3, 2, 4, -1, -1, -1, -1],
+                    [2, 9, 10, 2, 7, 9, 2, 3, 7, 7, 4, 9, -1, -1, -1, -1],
+                    [9, 10, 7, 9, 7, 4, 10, 2, 7, 8, 7, 0, 2, 0, 7, -1],
+                    [3, 7, 10, 3, 10, 2, 7, 4, 10, 1, 10, 0, 4, 0, 10, -1],
+                    [1, 10, 2, 8, 7, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [4, 9, 1, 4, 1, 7, 7, 1, 3, -1, -1, -1, -1, -1, -1, -1],
+                    [4, 9, 1, 4, 1, 7, 0, 8, 1, 8, 7, 1, -1, -1, -1, -1],
+                    [4, 0, 3, 7, 4, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [4, 8, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 10, 8, 10, 11, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 0, 9, 3, 9, 11, 11, 9, 10, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 1, 10, 0, 10, 8, 8, 10, 11, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 1, 10, 11, 3, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 2, 11, 1, 11, 9, 9, 11, 8, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 0, 9, 3, 9, 11, 1, 2, 9, 2, 11, 9, -1, -1, -1, -1],
+                    [0, 2, 11, 8, 0, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [3, 2, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [2, 3, 8, 2, 8, 10, 10, 8, 9, -1, -1, -1, -1, -1, -1, -1],
+                    [9, 10, 2, 0, 9, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [2, 3, 8, 2, 8, 10, 0, 1, 8, 1, 10, 8, -1, -1, -1, -1],
+                    [1, 10, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [1, 3, 8, 9, 1, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 9, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [0, 3, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+                    [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]
+                ],
+                edgeTable: [
+                    0x0, 0x109, 0x203, 0x30a, 0x406, 0x50f, 0x605, 0x70c,
+                    0x80c, 0x905, 0xa0f, 0xb06, 0xc0a, 0xd03, 0xe09, 0xf00,
+                    0x190, 0x99, 0x393, 0x29a, 0x596, 0x49f, 0x795, 0x69c,
+                    0x99c, 0x895, 0xb9f, 0xa96, 0xd9a, 0xc93, 0xf99, 0xe90,
+                    0x230, 0x339, 0x33, 0x13a, 0x636, 0x73f, 0x435, 0x53c,
+                    0xa3c, 0xb35, 0x83f, 0x936, 0xe3a, 0xf33, 0xc39, 0xd30,
+                    0x3a0, 0x2a9, 0x1a3, 0xaa, 0x7a6, 0x6af, 0x5a5, 0x4ac,
+                    0xbac, 0xaa5, 0x9af, 0x8a6, 0xfaa, 0xea3, 0xda9, 0xca0,
+                    0x460, 0x569, 0x663, 0x76a, 0x66, 0x16f, 0x265, 0x36c,
+                    0xc6c, 0xd65, 0xe6f, 0xf66, 0x86a, 0x963, 0xa69, 0xb60,
+                    0x5f0, 0x4f9, 0x7f3, 0x6fa, 0x1f6, 0xff, 0x3f5, 0x2fc,
+                    0xdfc, 0xcf5, 0xfff, 0xef6, 0x9fa, 0x8f3, 0xbf9, 0xaf0,
+                    0x650, 0x759, 0x453, 0x55a, 0x256, 0x35f, 0x55, 0x15c,
+                    0xe5c, 0xf55, 0xc5f, 0xd56, 0xa5a, 0xb53, 0x859, 0x950,
+                    0x7c0, 0x6c9, 0x5c3, 0x4ca, 0x3c6, 0x2cf, 0x1c5, 0xcc,
+                    0xfcc, 0xec5, 0xdcf, 0xcc6, 0xbca, 0xac3, 0x9c9, 0x8c0,
+                    0x8c0, 0x9c9, 0xac3, 0xbca, 0xcc6, 0xdcf, 0xec5, 0xfcc,
+                    0xcc, 0x1c5, 0x2cf, 0x3c6, 0x4ca, 0x5c3, 0x6c9, 0x7c0,
+                    0x950, 0x859, 0xb53, 0xa5a, 0xd56, 0xc5f, 0xf55, 0xe5c,
+                    0x15c, 0x55, 0x35f, 0x256, 0x55a, 0x453, 0x759, 0x650,
+                    0xaf0, 0xbf9, 0x8f3, 0x9fa, 0xef6, 0xfff, 0xcf5, 0xdfc,
+                    0x2fc, 0x3f5, 0xff, 0x1f6, 0x6fa, 0x7f3, 0x4f9, 0x5f0,
+                    0xb60, 0xa69, 0x963, 0x86a, 0xf66, 0xe6f, 0xd65, 0xc6c,
+                    0x36c, 0x265, 0x16f, 0x66, 0x76a, 0x663, 0x569, 0x460,
+                    0xca0, 0xda9, 0xea3, 0xfaa, 0x8a6, 0x9af, 0xaa5, 0xbac,
+                    0x4ac, 0x5a5, 0x6af, 0x7a6, 0xaa, 0x1a3, 0x2a9, 0x3a0,
+                    0xd30, 0xc39, 0xf33, 0xe3a, 0x936, 0x83f, 0xb35, 0xa3c,
+                    0x53c, 0x435, 0x73f, 0x636, 0x13a, 0x33, 0x339, 0x230,
+                    0xe90, 0xf99, 0xc93, 0xd9a, 0xa96, 0xb9f, 0x895, 0x99c,
+                    0x69c, 0x795, 0x49f, 0x596, 0x29a, 0x393, 0x99, 0x190,
+                    0xf00, 0xe09, 0xd03, 0xc0a, 0xb06, 0xa0f, 0x905, 0x80c,
+                    0x70c, 0x605, 0x50f, 0x406, 0x30a, 0x203, 0x109, 0x0
+                ],
+                cubeVerts: [
+                    vec3.fromValues(0, 0, 0),
+                    vec3.fromValues(1, 0, 0),
+                    vec3.fromValues(1, 1, 0),
+                    vec3.fromValues(0, 1, 0),
+                    vec3.fromValues(0, 0, 1),
+                    vec3.fromValues(1, 0, 1),
+                    vec3.fromValues(1, 1, 1),
+                    vec3.fromValues(0, 1, 1)
+                ],
+                checks: [
+                    0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7
+                ],
+            };
+
+            /* Chunk class */
+            class Chunk {
+                constructor(x, y, z) {
+                    this.x = x;
+                    this.y = y;
+                    this.z = z;
+
+                    this.rotation = 0;
+
+                    this.modelMatrix = mat4.create();
+
+                    this.vertexArray = gl.createVertexArray();
+                    gl.bindVertexArray(this.vertexArray);
+                    program.enableAttributes();
+
+                    this.positionBuffer = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+                    gl.vertexAttribPointer(program.attribLocations.a_position.location, 3, gl.FLOAT, false, 0, 0);
+
+                    this.colorBuffer = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
+                    gl.vertexAttribPointer(program.attribLocations.a_color.location, 3, gl.FLOAT, false, 0, 0);
+
+                    this.normalBuffer = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.normalBuffer);
+                    gl.vertexAttribPointer(program.attribLocations.a_normal.location, 3, gl.FLOAT, false, 0, 0);
+
+                    this.indexBuffer = gl.createBuffer();
+
+                    gl.bindVertexArray(null);
+
+                    this.vertices = [];
+                    this.triangles = [];
+                    this.colors = [];
+                    this.normals = [];
+
+                    this.valueMap = [];
+                }
+
+                populateValueMap() {
+
+                    let tex = gl.createTexture();
+                    const n = CHUNK_SIZE + 1;
+                    let texWidth = n * n;
+                    let texHeight = n;
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, terrainGen.framebuffer);
+                    gl.viewport(0, 0, texWidth, texHeight);
+                    terrainGen.setOffset(this.x, this.y, this.z);
+                    terrainGen.render();
+                    let numChannels = 4;
+                    let pixels = new Uint8Array(texWidth * texHeight * numChannels);
+                    gl.readPixels(0, 0, texWidth, texHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+                    console.log(pixels);
+                    for (let x = 0; x < n; x ++) {
+                        for (let y = 0; y < n; y ++) {
+                            for (let z = 0; z < n; z ++) {
+                                let tx = x + z * n;
+                                let ty = y;
+                                let l = (tx + ty * texWidth) * numChannels;
+                                this.valueMap[this.getIndex(x, y, z)] = pixels[l] / 255.0 - 0.5;
+                            }
+                        }
+                    }
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                    console.log(this.valueMap);
+                }
+
+                getIndex (x, y, z) {
+                    return x + (y + z * (CHUNK_SIZE + 1)) * (CHUNK_SIZE + 1);
+                }
+
+                getValueAt (ix, iy, iz) {
+                    return this.valueMap[this.getIndex(ix, iy, iz)];
+                }
+
+                getConfig (ix, iy, iz) {
+                    let c = 0;
+                    c |= this.getValueAt(ix, iy, iz) < ISO_LEVEL;
+                    c |= (this.getValueAt(ix + 1, iy, iz) < ISO_LEVEL) << 1;
+                    c |= (this.getValueAt(ix + 1, iy + 1, iz) < ISO_LEVEL) << 2;
+                    c |= (this.getValueAt(ix, iy + 1, iz) < ISO_LEVEL) << 3;
+                    c |= (this.getValueAt(ix, iy, iz + 1) < ISO_LEVEL) << 4;
+                    c |= (this.getValueAt(ix + 1, iy, iz + 1) < ISO_LEVEL) << 5;
+                    c |= (this.getValueAt(ix + 1, iy + 1, iz + 1) < ISO_LEVEL) << 6;
+                    c |= (this.getValueAt(ix, iy + 1, iz + 1) < ISO_LEVEL) << 7;
+                    return c
+                }
+
+                lerpVerts(iA, iB, ix, iy, iz) {
+                    let v1 = this.getValueAt(
+                        ix + lookup.cubeVerts[iA][0],
+                        iy + lookup.cubeVerts[iA][1],
+                        iz + lookup.cubeVerts[iA][2]);
+                    let v2 = this.getValueAt(
+                        ix + lookup.cubeVerts[iB][0],
+                        iy + lookup.cubeVerts[iB][1],
+                        iz + lookup.cubeVerts[iB][2]);
+                    let f = (ISO_LEVEL - v1) / (v2 - v1);
+
+                    f = f * INTERPOLATION + 0.5 * (1 - INTERPOLATION);
+
+                    let g = 1 - f;
+                    return vec3.fromValues(
+                        lookup.cubeVerts[iA][0] * g + lookup.cubeVerts[iB][0] * f + ix,
+                        lookup.cubeVerts[iA][1] * g + lookup.cubeVerts[iB][1] * f + iy,
+                        lookup.cubeVerts[iA][2] * g + lookup.cubeVerts[iB][2] * f + iz
+                    );
+                }
+
+                marchCube(ix, iy, iz, tempArr) {
+                    let cubeIndex = this.getConfig(ix, iy, iz);
+                    let et = lookup.edgeTable[cubeIndex];
+                    if (!et) return;
+                    let nt = tempArr.length;
+                    for (let i = 0; lookup.triTable[cubeIndex][i] !== -1 && i < 12; i += 3) {
+                        let i1 = lookup.triTable[cubeIndex][i],
+                            i2 = lookup.triTable[cubeIndex][i+1],
+                            i3 = lookup.triTable[cubeIndex][i+2];
+                        let v1 = this.lerpVerts(lookup.checks[i1 * 2], lookup.checks[i1 * 2 + 1], ix, iy, iz);
+                        let v2 = this.lerpVerts(lookup.checks[i2 * 2], lookup.checks[i2 * 2 + 1], ix, iy, iz);
+                        let v3 = this.lerpVerts(lookup.checks[i3 * 2], lookup.checks[i3 * 2 + 1], ix, iy, iz);
+                        tempArr[nt + 0] = v1[0];
+                        tempArr[nt + 1] = v1[1];
+                        tempArr[nt + 2] = v1[2];
+                        tempArr[nt + 3] = v2[0];
+                        tempArr[nt + 4] = v2[1];
+                        tempArr[nt + 5] = v2[2];
+                        tempArr[nt + 6] = v3[0];
+                        tempArr[nt + 7] = v3[1];
+                        tempArr[nt + 8] = v3[2];
+                        nt += 9;
+                    }
+                }
+
+                generateColors() {
+                    this.colors = new Float32Array(this.vertices.length);
+                    for (let i = 0; i < this.colors.length; i += 3) {
+                        let n = noise(this.vertices[i] * 0.1, this.vertices[i + 1] * 0.1, this.vertices[i + 2] * 0.1);
+                        this.colors[i] = n;
+                        this.colors[i+1] = n;
+                        this.colors[i+2] = n;
+                    }
+                }
+
+                generateNormals() {
+                    this.normals = new Float32Array(this.vertices.length);
+                    if (FLAT_SHADING) {
+                        for (let i = 0; i < this.normals.length; i += 3) {
+                            let i1 = this.triangles[(i/9|0)*3];
+                            let i2 = this.triangles[(i/9|0)*3+1];
+                            let i3 = this.triangles[(i/9|0)*3+2];
+
+                            let v1 = vec3.fromValues(this.vertices[i1*3], this.vertices[i1*3+1], this.vertices[i1*3+2]);
+                            let v2 = vec3.fromValues(this.vertices[i2*3], this.vertices[i2*3+1], this.vertices[i2*3+2]);
+                            let v3 = vec3.fromValues(this.vertices[i3*3], this.vertices[i3*3+1], this.vertices[i3*3+2]);
+
+                            vec3.sub(v1, v1, v2);
+                            vec3.sub(v2, v2, v3);
+                            vec3.cross(v1, v1, v2);
+                            vec3.normalize(v1, v1);
+
+                            this.normals[i] = v1[0];
+                            this.normals[i+1] = v1[1];
+                            this.normals[i+2] = v1[2];
+                        }
+                    } else {
+                        console.error("Smooth shading not implemented yet!");
+                    }
+
+                }
+
+                generateMesh() {
+                    let tempArr = [];
+                    for (let x = 0; x < CHUNK_SIZE; x ++) {
+                        for (let y = 0; y < CHUNK_SIZE; y ++) {
+                            for (let z = 0; z < CHUNK_SIZE; z ++) {
+                                this.marchCube(x, y, z, tempArr);
+                            }
+                        }
+                    }
+
+                    let tempTris = [];
+                    for (let i = 0; i < tempArr.length / 9; i ++) {
+                        tempTris.push(i * 3);
+                        tempTris.push(i * 3 + 1);
+                        tempTris.push(i * 3 + 2);
+                    }
+
+                    this.vertices = new Float32Array(tempArr);
+                    this.triangles = new Uint16Array(tempTris);
+
+                    this.generateColors();
+                    this.generateNormals();
+
+                    /* Cleanup */
+                    tempArr = null;
+                    tempTris = null;
+                }
+
+                setBuffer() {
+                    gl.bindVertexArray(this.vertexArray);
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+                    gl.bufferData(gl.ARRAY_BUFFER, this.vertices, gl.STATIC_DRAW);
+
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
+                    gl.bufferData(gl.ARRAY_BUFFER, this.colors, gl.STATIC_DRAW);
+
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.normalBuffer);
+                    gl.bufferData(gl.ARRAY_BUFFER, this.normals, gl.STATIC_DRAW);
+
+                    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+                    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.triangles, gl.STATIC_DRAW);
+
+                    gl.bindVertexArray(null);
+                }
+
+                render () {
+                    this.rotation += 0.01;
+
+                    mat4.translate(this.modelMatrix, mat4.create(), [this.x, this.y, this.z]);
+                    //mat4.rotate(this.modelMatrix, this.modelMatrix, this.rotation, [0, 1, 0]);
+
+                    gl.uniformMatrix4fv(program.uniformLocations.m_matrix.location, false, this.modelMatrix);
+                    gl.bindVertexArray(this.vertexArray);
+                    gl.drawElements(gl.TRIANGLES, this.triangles.length, gl.UNSIGNED_SHORT, 0);
+                }
+            }
+
+            /* World object */
+            const world = {
+                chunks: [],
+                chunkReference: {},
+                loadQueue: [],
+
+                mapFunc (x, y, z) {
+                    return noise((x + OFFSET[0]) * 0.05 * SCALE, (y + OFFSET[1]) * 0.05 * SCALE, (z + OFFSET[2]) * 0.05 * SCALE) - 0.5;
+                },
+
+            };
+
+            /* Handles user interface */
+            const ui = {
+                display () {
+                    // Setup and fps display
+                    ctx.clearRect(0, 0, globWidth, globHeight);
+                    ctx.fillStyle = "#FFFFFF";
+                    ctx.font = "30px Arial";
+                    ctx.textAlign = "left";
+                    ctx.fillText(statistics.fps.toFixed(2), 10, 25);
+                },
+            };
+
+            /* Runs once */
+            let c1, c2;
+            function setup (now) {
+                gl.viewport(0, 0, globWidth, globHeight);
+                gl.clearColor(0.5, 0.5, 1.0, 1.0);
+                gl.clearDepth(1.0);
+                gl.enable(gl.DEPTH_TEST);
+                gl.depthFunc(gl.LEQUAL);
+                gl.enable(gl.CULL_FACE);
+                gl.cullFace(gl.BACK);
+
+                terrainGen.initialize();
+                input.initialize();
+
+                gl.useProgram(program.program);
+                gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+                camera.constructMatrix();
+                camera.setMatrix();
+                camera.control2();
+
+                c1 = new Chunk(-CHUNK_SIZE / 2, -CHUNK_SIZE / 2, -CHUNK_SIZE / 2);
+                c1.populateValueMap();
+                c1.generateMesh();
+                c1.setBuffer();
+
+                c2 = new Chunk(-CHUNK_SIZE / 2 - CHUNK_SIZE, -CHUNK_SIZE / 2, -CHUNK_SIZE / 2);
+                c2.populateValueMap();
+                c2.generateMesh();
+                c2.setBuffer();
+
+                requestAnimationFrame(render);
+            }
+
+            /* Runs every frame */
+            function render (now) {
+                gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+                statistics.update(now);
+
+
+                gl.viewport(0, 0, globWidth, globHeight);
+                gl.useProgram(program.program);
+                camera.controls();
+                //camera.control2();
+                camera.constructMatrix();
+                camera.setMatrix();
+
+                c1.render();
+                c2.render();
+
+                ui.display();
+
+                input.update();
+
+                requestAnimationFrame(render);
+            }
+
+            setup();
+        }
+    </script>
+
+    <!-- Let's light this candle! -->
+    <script type="text/javascript" id="main.js">
+        MarchingCubes();
+    </script>
+</body>
+</html>

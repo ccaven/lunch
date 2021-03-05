@@ -1,0 +1,1708 @@
+<!DOCTYPE html>
+<html lang="en">
+    <!--
+    
+    -->
+
+    <head>
+        <meta charset="utf-8">
+        <title>marching-cubes</title>
+        <style>
+            body {
+                margin: 0px;
+                padding: 0px;
+                overflow: hidden;
+                background-color: gray;
+            }
+            
+            canvas {
+                margin: 0px;
+                padding: 0px;
+                position: absolute;
+            }
+        </style>
+    </head>
+    <body>
+        <canvas id="gl-output" width="600" height="600"></canvas>
+        <canvas id="ui-output" width="600" height="600"></canvas>
+    </body>
+    
+    <!-- Terrain vertex shader -->
+    <script id="terrain-vertex" type="notjs">
+        uniform mat4 uProjection;
+
+        attribute vec3 aPosition;
+        attribute vec3 aColor;
+
+        varying vec3 vColor;
+
+        void main () {
+            gl_Position = uProjection * vec4(aPosition, 1.0);
+            vColor = aColor;
+        }
+
+    </script>
+    
+    <!-- Terrain fragment shader -->
+    <script id="terrain-fragment" type="notjs">
+        precision mediump float;
+        
+        varying vec3 vColor;
+        
+        void main () {
+            gl_FragColor = vec4(vColor, 1.0);
+        }
+    </script>
+    
+    <!-- Matrix4 library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/2.8.1/gl-matrix-min.js"></script>
+    
+    <script type="application/javascript">
+
+var globWidth = 600;
+var globHeight = 600;
+
+function MarchingCubes() {
+    const canvas = document.querySelector("#ui-output");
+    canvas.width = globWidth;
+    canvas.height = globHeight;
+
+    const ctx = canvas.getContext("2d");
+
+    const glCanvas = document.querySelector("#gl-output");
+    glCanvas.width = globWidth;
+    glCanvas.height = globHeight;
+
+    const gl = glCanvas.getContext("webgl");
+    gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+
+    let seedHash, hash = (() => {
+        let seed = Math.random() * 2100000000 | 0;
+        let PRIME32_2 = 1883677709;
+        let PRIME32_3 = 2034071983;
+        let PRIME32_4 = 668265263;
+        let PRIME32_5 = 374761393;
+
+        seedHash = (s) => {
+            seed = s | 0;
+        };
+
+        return (x, y) => {
+            let h32 = 0;
+
+            h32 = seed + PRIME32_5 | 0;
+            h32 += 8;
+
+            h32 += Math.imul(x, PRIME32_3);
+            h32 = Math.imul(h32 << 17 | h32 >> 32 - 17, PRIME32_4);
+            h32 += Math.imul(y, PRIME32_3);
+            h32 = Math.imul(h32 << 17 | h32 >> 32 - 17, PRIME32_4);
+
+            h32 ^= h32 >> 15;
+            h32 *= PRIME32_2;
+            h32 ^= h32 >> 13;
+            h32 *= PRIME32_3;
+            h32 ^= h32 >> 16;
+
+            return h32 / 2147483647;
+        };
+    })();
+
+    let currentRandom = null;
+    /**
+     * @param {number} i1
+     * @param {number} i2
+     */
+    function Marsaglia(i1, i2) {
+        let z = (i1 | 0) || 362436069,
+            w = i2 || hash(521288629, z) * 2147483647 | 0;
+        this.nextInt = () => {
+            z = 36969 * (z & 65535) + (z >>> 16) & 0xFFFFFFFF;
+            w = 18000 * (w & 65535) + (w >>> 16) & 0xFFFFFFFF;
+            return ((z & 0xFFFF) << 16 | w & 0xFFFF) & 0xFFFFFFFF;
+        };
+        this.nextDouble = () => {
+            let i = this.nextInt() / 4294967296;
+            return i < 0 ? 1 + i : i;
+        };
+    }
+
+    const noiseProfile = {
+        octaves: 3,
+        fallout: 0.5
+    };
+
+    /**
+     * Create a new Perlin Noise generator
+     * @param {number} seed
+     */
+    function PerlinNoise(seed) {
+        let rnd = seed !== undefined ? new Marsaglia(seed) : Marsaglia.createRandomized();
+        let i, j;
+        let perm = new Uint8Array(512);
+        for (i = 0; i < 256; ++i) {
+            perm[i] = i;
+        }
+        for (i = 0; i < 256; ++i) {
+            let t = perm[j = rnd.nextInt() & 0xFF];
+            perm[j] = perm[i];
+            perm[i] = t;
+        }
+        // copy to avoid taking mod in perm[0];
+        for (i = 0; i < 256; ++i) {
+            perm[i + 256] = perm[i];
+        }
+
+        /**
+         * @param {number} i
+         * @param {number} x
+         * @param {number} y
+         * @param {number} z
+         */
+        function grad3d(i, x, y, z) {
+            let h = i & 15; // convert into 12 gradient directions
+            let u = h < 8 ? x : y,
+                v = h < 4 ? y : h === 12 || h === 14 ? x : z;
+            return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
+        }
+
+        /**
+         * @param {number} i
+         * @param {number} x
+         * @param {number} y
+         */
+        function grad2d(i, x, y) {
+            let v = (i & 1) === 0 ? x : y;
+            return (i & 2) === 0 ? -v : v;
+        }
+
+        /**
+         * @param {number} i
+         * @param {number} x
+         */
+        function grad1d(i, x) {
+            return (i & 1) === 0 ? -x : x;
+        }
+
+        function lerp(t, a, b) {
+            return a + t * (b - a);
+        }
+
+        this.noise3d = function(x, y, z) {
+            let X = Math.floor(x) & 255,
+                Y = Math.floor(y) & 255,
+                Z = Math.floor(z) & 255;
+            x -= Math.floor(x);
+            y -= Math.floor(y);
+            z -= Math.floor(z);
+            let fx = (3 - 2 * x) * x * x,
+                fy = (3 - 2 * y) * y * y,
+                fz = (3 - 2 * z) * z * z;
+            let p0 = perm[X] + Y,
+                p00 = perm[p0] + Z,
+                p01 = perm[p0 + 1] + Z,
+                p1 = perm[X + 1] + Y,
+                p10 = perm[p1] + Z,
+                p11 = perm[p1 + 1] + Z;
+            return lerp(fz,
+                lerp(fy, lerp(fx, grad3d(perm[p00], x, y, z), grad3d(perm[p10], x - 1, y, z)),
+                    lerp(fx, grad3d(perm[p01], x, y - 1, z), grad3d(perm[p11], x - 1, y - 1, z))),
+                lerp(fy, lerp(fx, grad3d(perm[p00 + 1], x, y, z - 1), grad3d(perm[p10 + 1], x - 1, y, z - 1)),
+                    lerp(fx, grad3d(perm[p01 + 1], x, y - 1, z - 1), grad3d(perm[p11 + 1], x - 1, y - 1, z - 1))));
+        };
+
+        this.noise2d = function(x, y) {
+            let X = Math.floor(x) & 255,
+                Y = Math.floor(y) & 255;
+            x -= Math.floor(x);
+            y -= Math.floor(y);
+            let fx = (3 - 2 * x) * x * x,
+                fy = (3 - 2 * y) * y * y;
+            let p0 = perm[X] + Y,
+                p1 = perm[X + 1] + Y;
+            return lerp(fy,
+                lerp(fx, grad2d(perm[p0], x, y), grad2d(perm[p1], x - 1, y)),
+                lerp(fx, grad2d(perm[p0 + 1], x, y - 1), grad2d(perm[p1 + 1], x - 1, y - 1)));
+        };
+
+        this.noise1d = function(x) {
+            let X = Math.floor(x) & 255;
+            x -= Math.floor(x);
+            let fx = (3 - 2 * x) * x * x;
+            return lerp(fx, grad1d(perm[X], x), grad1d(perm[X + 1], x - 1));
+        };
+    }
+
+    /**
+     * Set the noise seed
+     * @param {number} seed
+     */
+    function noiseSeed(seed) {
+        noiseProfile.seed = seed;
+        noiseProfile.generator = new PerlinNoise(noiseProfile.seed);
+    };
+
+    /**
+     * Generate 3D noise
+     * @param {number} x
+     * @param {number} y
+     * @param {number} z
+     */
+    function noise(x, y, z) {
+        let generator = noiseProfile.generator;
+        let effect = 1,
+            k = 1,
+            sum = 0;
+        for (let i = 0; i < noiseProfile.octaves; ++i) {
+            effect *= noiseProfile.fallout;
+            sum += effect * (1 + generator.noise3d(k * x, k * y, k * z)) / 2;
+            k *= 2;
+        }
+        return sum;
+    };
+
+    /**
+     * Triangulation table
+     */
+    const triTable = [
+        [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 8, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 1, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 8, 3, 9, 8, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 2, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 8, 3, 1, 2, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [9, 2, 10, 0, 2, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [2, 8, 3, 2, 10, 8, 10, 9, 8, -1, -1, -1, -1, -1, -1, -1],
+        [3, 11, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 11, 2, 8, 11, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 9, 0, 2, 3, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 11, 2, 1, 9, 11, 9, 8, 11, -1, -1, -1, -1, -1, -1, -1],
+        [3, 10, 1, 11, 10, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 10, 1, 0, 8, 10, 8, 11, 10, -1, -1, -1, -1, -1, -1, -1],
+        [3, 9, 0, 3, 11, 9, 11, 10, 9, -1, -1, -1, -1, -1, -1, -1],
+        [9, 8, 10, 10, 8, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [4, 7, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [4, 3, 0, 7, 3, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 1, 9, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [4, 1, 9, 4, 7, 1, 7, 3, 1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 2, 10, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [3, 4, 7, 3, 0, 4, 1, 2, 10, -1, -1, -1, -1, -1, -1, -1],
+        [9, 2, 10, 9, 0, 2, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1],
+        [2, 10, 9, 2, 9, 7, 2, 7, 3, 7, 9, 4, -1, -1, -1, -1],
+        [8, 4, 7, 3, 11, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [11, 4, 7, 11, 2, 4, 2, 0, 4, -1, -1, -1, -1, -1, -1, -1],
+        [9, 0, 1, 8, 4, 7, 2, 3, 11, -1, -1, -1, -1, -1, -1, -1],
+        [4, 7, 11, 9, 4, 11, 9, 11, 2, 9, 2, 1, -1, -1, -1, -1],
+        [3, 10, 1, 3, 11, 10, 7, 8, 4, -1, -1, -1, -1, -1, -1, -1],
+        [1, 11, 10, 1, 4, 11, 1, 0, 4, 7, 11, 4, -1, -1, -1, -1],
+        [4, 7, 8, 9, 0, 11, 9, 11, 10, 11, 0, 3, -1, -1, -1, -1],
+        [4, 7, 11, 4, 11, 9, 9, 11, 10, -1, -1, -1, -1, -1, -1, -1],
+        [9, 5, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [9, 5, 4, 0, 8, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 5, 4, 1, 5, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [8, 5, 4, 8, 3, 5, 3, 1, 5, -1, -1, -1, -1, -1, -1, -1],
+        [1, 2, 10, 9, 5, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [3, 0, 8, 1, 2, 10, 4, 9, 5, -1, -1, -1, -1, -1, -1, -1],
+        [5, 2, 10, 5, 4, 2, 4, 0, 2, -1, -1, -1, -1, -1, -1, -1],
+        [2, 10, 5, 3, 2, 5, 3, 5, 4, 3, 4, 8, -1, -1, -1, -1],
+        [9, 5, 4, 2, 3, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 11, 2, 0, 8, 11, 4, 9, 5, -1, -1, -1, -1, -1, -1, -1],
+        [0, 5, 4, 0, 1, 5, 2, 3, 11, -1, -1, -1, -1, -1, -1, -1],
+        [2, 1, 5, 2, 5, 8, 2, 8, 11, 4, 8, 5, -1, -1, -1, -1],
+        [10, 3, 11, 10, 1, 3, 9, 5, 4, -1, -1, -1, -1, -1, -1, -1],
+        [4, 9, 5, 0, 8, 1, 8, 10, 1, 8, 11, 10, -1, -1, -1, -1],
+        [5, 4, 0, 5, 0, 11, 5, 11, 10, 11, 0, 3, -1, -1, -1, -1],
+        [5, 4, 8, 5, 8, 10, 10, 8, 11, -1, -1, -1, -1, -1, -1, -1],
+        [9, 7, 8, 5, 7, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [9, 3, 0, 9, 5, 3, 5, 7, 3, -1, -1, -1, -1, -1, -1, -1],
+        [0, 7, 8, 0, 1, 7, 1, 5, 7, -1, -1, -1, -1, -1, -1, -1],
+        [1, 5, 3, 3, 5, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [9, 7, 8, 9, 5, 7, 10, 1, 2, -1, -1, -1, -1, -1, -1, -1],
+        [10, 1, 2, 9, 5, 0, 5, 3, 0, 5, 7, 3, -1, -1, -1, -1],
+        [8, 0, 2, 8, 2, 5, 8, 5, 7, 10, 5, 2, -1, -1, -1, -1],
+        [2, 10, 5, 2, 5, 3, 3, 5, 7, -1, -1, -1, -1, -1, -1, -1],
+        [7, 9, 5, 7, 8, 9, 3, 11, 2, -1, -1, -1, -1, -1, -1, -1],
+        [9, 5, 7, 9, 7, 2, 9, 2, 0, 2, 7, 11, -1, -1, -1, -1],
+        [2, 3, 11, 0, 1, 8, 1, 7, 8, 1, 5, 7, -1, -1, -1, -1],
+        [11, 2, 1, 11, 1, 7, 7, 1, 5, -1, -1, -1, -1, -1, -1, -1],
+        [9, 5, 8, 8, 5, 7, 10, 1, 3, 10, 3, 11, -1, -1, -1, -1],
+        [5, 7, 0, 5, 0, 9, 7, 11, 0, 1, 0, 10, 11, 10, 0, -1],
+        [11, 10, 0, 11, 0, 3, 10, 5, 0, 8, 0, 7, 5, 7, 0, -1],
+        [11, 10, 5, 7, 11, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [10, 6, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 8, 3, 5, 10, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [9, 0, 1, 5, 10, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 8, 3, 1, 9, 8, 5, 10, 6, -1, -1, -1, -1, -1, -1, -1],
+        [1, 6, 5, 2, 6, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 6, 5, 1, 2, 6, 3, 0, 8, -1, -1, -1, -1, -1, -1, -1],
+        [9, 6, 5, 9, 0, 6, 0, 2, 6, -1, -1, -1, -1, -1, -1, -1],
+        [5, 9, 8, 5, 8, 2, 5, 2, 6, 3, 2, 8, -1, -1, -1, -1],
+        [2, 3, 11, 10, 6, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [11, 0, 8, 11, 2, 0, 10, 6, 5, -1, -1, -1, -1, -1, -1, -1],
+        [0, 1, 9, 2, 3, 11, 5, 10, 6, -1, -1, -1, -1, -1, -1, -1],
+        [5, 10, 6, 1, 9, 2, 9, 11, 2, 9, 8, 11, -1, -1, -1, -1],
+        [6, 3, 11, 6, 5, 3, 5, 1, 3, -1, -1, -1, -1, -1, -1, -1],
+        [0, 8, 11, 0, 11, 5, 0, 5, 1, 5, 11, 6, -1, -1, -1, -1],
+        [3, 11, 6, 0, 3, 6, 0, 6, 5, 0, 5, 9, -1, -1, -1, -1],
+        [6, 5, 9, 6, 9, 11, 11, 9, 8, -1, -1, -1, -1, -1, -1, -1],
+        [5, 10, 6, 4, 7, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [4, 3, 0, 4, 7, 3, 6, 5, 10, -1, -1, -1, -1, -1, -1, -1],
+        [1, 9, 0, 5, 10, 6, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1],
+        [10, 6, 5, 1, 9, 7, 1, 7, 3, 7, 9, 4, -1, -1, -1, -1],
+        [6, 1, 2, 6, 5, 1, 4, 7, 8, -1, -1, -1, -1, -1, -1, -1],
+        [1, 2, 5, 5, 2, 6, 3, 0, 4, 3, 4, 7, -1, -1, -1, -1],
+        [8, 4, 7, 9, 0, 5, 0, 6, 5, 0, 2, 6, -1, -1, -1, -1],
+        [7, 3, 9, 7, 9, 4, 3, 2, 9, 5, 9, 6, 2, 6, 9, -1],
+        [3, 11, 2, 7, 8, 4, 10, 6, 5, -1, -1, -1, -1, -1, -1, -1],
+        [5, 10, 6, 4, 7, 2, 4, 2, 0, 2, 7, 11, -1, -1, -1, -1],
+        [0, 1, 9, 4, 7, 8, 2, 3, 11, 5, 10, 6, -1, -1, -1, -1],
+        [9, 2, 1, 9, 11, 2, 9, 4, 11, 7, 11, 4, 5, 10, 6, -1],
+        [8, 4, 7, 3, 11, 5, 3, 5, 1, 5, 11, 6, -1, -1, -1, -1],
+        [5, 1, 11, 5, 11, 6, 1, 0, 11, 7, 11, 4, 0, 4, 11, -1],
+        [0, 5, 9, 0, 6, 5, 0, 3, 6, 11, 6, 3, 8, 4, 7, -1],
+        [6, 5, 9, 6, 9, 11, 4, 7, 9, 7, 11, 9, -1, -1, -1, -1],
+        [10, 4, 9, 6, 4, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [4, 10, 6, 4, 9, 10, 0, 8, 3, -1, -1, -1, -1, -1, -1, -1],
+        [10, 0, 1, 10, 6, 0, 6, 4, 0, -1, -1, -1, -1, -1, -1, -1],
+        [8, 3, 1, 8, 1, 6, 8, 6, 4, 6, 1, 10, -1, -1, -1, -1],
+        [1, 4, 9, 1, 2, 4, 2, 6, 4, -1, -1, -1, -1, -1, -1, -1],
+        [3, 0, 8, 1, 2, 9, 2, 4, 9, 2, 6, 4, -1, -1, -1, -1],
+        [0, 2, 4, 4, 2, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [8, 3, 2, 8, 2, 4, 4, 2, 6, -1, -1, -1, -1, -1, -1, -1],
+        [10, 4, 9, 10, 6, 4, 11, 2, 3, -1, -1, -1, -1, -1, -1, -1],
+        [0, 8, 2, 2, 8, 11, 4, 9, 10, 4, 10, 6, -1, -1, -1, -1],
+        [3, 11, 2, 0, 1, 6, 0, 6, 4, 6, 1, 10, -1, -1, -1, -1],
+        [6, 4, 1, 6, 1, 10, 4, 8, 1, 2, 1, 11, 8, 11, 1, -1],
+        [9, 6, 4, 9, 3, 6, 9, 1, 3, 11, 6, 3, -1, -1, -1, -1],
+        [8, 11, 1, 8, 1, 0, 11, 6, 1, 9, 1, 4, 6, 4, 1, -1],
+        [3, 11, 6, 3, 6, 0, 0, 6, 4, -1, -1, -1, -1, -1, -1, -1],
+        [6, 4, 8, 11, 6, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [7, 10, 6, 7, 8, 10, 8, 9, 10, -1, -1, -1, -1, -1, -1, -1],
+        [0, 7, 3, 0, 10, 7, 0, 9, 10, 6, 7, 10, -1, -1, -1, -1],
+        [10, 6, 7, 1, 10, 7, 1, 7, 8, 1, 8, 0, -1, -1, -1, -1],
+        [10, 6, 7, 10, 7, 1, 1, 7, 3, -1, -1, -1, -1, -1, -1, -1],
+        [1, 2, 6, 1, 6, 8, 1, 8, 9, 8, 6, 7, -1, -1, -1, -1],
+        [2, 6, 9, 2, 9, 1, 6, 7, 9, 0, 9, 3, 7, 3, 9, -1],
+        [7, 8, 0, 7, 0, 6, 6, 0, 2, -1, -1, -1, -1, -1, -1, -1],
+        [7, 3, 2, 6, 7, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [2, 3, 11, 10, 6, 8, 10, 8, 9, 8, 6, 7, -1, -1, -1, -1],
+        [2, 0, 7, 2, 7, 11, 0, 9, 7, 6, 7, 10, 9, 10, 7, -1],
+        [1, 8, 0, 1, 7, 8, 1, 10, 7, 6, 7, 10, 2, 3, 11, -1],
+        [11, 2, 1, 11, 1, 7, 10, 6, 1, 6, 7, 1, -1, -1, -1, -1],
+        [8, 9, 6, 8, 6, 7, 9, 1, 6, 11, 6, 3, 1, 3, 6, -1],
+        [0, 9, 1, 11, 6, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [7, 8, 0, 7, 0, 6, 3, 11, 0, 11, 6, 0, -1, -1, -1, -1],
+        [7, 11, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [7, 6, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [3, 0, 8, 11, 7, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 1, 9, 11, 7, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [8, 1, 9, 8, 3, 1, 11, 7, 6, -1, -1, -1, -1, -1, -1, -1],
+        [10, 1, 2, 6, 11, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 2, 10, 3, 0, 8, 6, 11, 7, -1, -1, -1, -1, -1, -1, -1],
+        [2, 9, 0, 2, 10, 9, 6, 11, 7, -1, -1, -1, -1, -1, -1, -1],
+        [6, 11, 7, 2, 10, 3, 10, 8, 3, 10, 9, 8, -1, -1, -1, -1],
+        [7, 2, 3, 6, 2, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [7, 0, 8, 7, 6, 0, 6, 2, 0, -1, -1, -1, -1, -1, -1, -1],
+        [2, 7, 6, 2, 3, 7, 0, 1, 9, -1, -1, -1, -1, -1, -1, -1],
+        [1, 6, 2, 1, 8, 6, 1, 9, 8, 8, 7, 6, -1, -1, -1, -1],
+        [10, 7, 6, 10, 1, 7, 1, 3, 7, -1, -1, -1, -1, -1, -1, -1],
+        [10, 7, 6, 1, 7, 10, 1, 8, 7, 1, 0, 8, -1, -1, -1, -1],
+        [0, 3, 7, 0, 7, 10, 0, 10, 9, 6, 10, 7, -1, -1, -1, -1],
+        [7, 6, 10, 7, 10, 8, 8, 10, 9, -1, -1, -1, -1, -1, -1, -1],
+        [6, 8, 4, 11, 8, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [3, 6, 11, 3, 0, 6, 0, 4, 6, -1, -1, -1, -1, -1, -1, -1],
+        [8, 6, 11, 8, 4, 6, 9, 0, 1, -1, -1, -1, -1, -1, -1, -1],
+        [9, 4, 6, 9, 6, 3, 9, 3, 1, 11, 3, 6, -1, -1, -1, -1],
+        [6, 8, 4, 6, 11, 8, 2, 10, 1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 2, 10, 3, 0, 11, 0, 6, 11, 0, 4, 6, -1, -1, -1, -1],
+        [4, 11, 8, 4, 6, 11, 0, 2, 9, 2, 10, 9, -1, -1, -1, -1],
+        [10, 9, 3, 10, 3, 2, 9, 4, 3, 11, 3, 6, 4, 6, 3, -1],
+        [8, 2, 3, 8, 4, 2, 4, 6, 2, -1, -1, -1, -1, -1, -1, -1],
+        [0, 4, 2, 4, 6, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 9, 0, 2, 3, 4, 2, 4, 6, 4, 3, 8, -1, -1, -1, -1],
+        [1, 9, 4, 1, 4, 2, 2, 4, 6, -1, -1, -1, -1, -1, -1, -1],
+        [8, 1, 3, 8, 6, 1, 8, 4, 6, 6, 10, 1, -1, -1, -1, -1],
+        [10, 1, 0, 10, 0, 6, 6, 0, 4, -1, -1, -1, -1, -1, -1, -1],
+        [4, 6, 3, 4, 3, 8, 6, 10, 3, 0, 3, 9, 10, 9, 3, -1],
+        [10, 9, 4, 6, 10, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [4, 9, 5, 7, 6, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 8, 3, 4, 9, 5, 11, 7, 6, -1, -1, -1, -1, -1, -1, -1],
+        [5, 0, 1, 5, 4, 0, 7, 6, 11, -1, -1, -1, -1, -1, -1, -1],
+        [11, 7, 6, 8, 3, 4, 3, 5, 4, 3, 1, 5, -1, -1, -1, -1],
+        [9, 5, 4, 10, 1, 2, 7, 6, 11, -1, -1, -1, -1, -1, -1, -1],
+        [6, 11, 7, 1, 2, 10, 0, 8, 3, 4, 9, 5, -1, -1, -1, -1],
+        [7, 6, 11, 5, 4, 10, 4, 2, 10, 4, 0, 2, -1, -1, -1, -1],
+        [3, 4, 8, 3, 5, 4, 3, 2, 5, 10, 5, 2, 11, 7, 6, -1],
+        [7, 2, 3, 7, 6, 2, 5, 4, 9, -1, -1, -1, -1, -1, -1, -1],
+        [9, 5, 4, 0, 8, 6, 0, 6, 2, 6, 8, 7, -1, -1, -1, -1],
+        [3, 6, 2, 3, 7, 6, 1, 5, 0, 5, 4, 0, -1, -1, -1, -1],
+        [6, 2, 8, 6, 8, 7, 2, 1, 8, 4, 8, 5, 1, 5, 8, -1],
+        [9, 5, 4, 10, 1, 6, 1, 7, 6, 1, 3, 7, -1, -1, -1, -1],
+        [1, 6, 10, 1, 7, 6, 1, 0, 7, 8, 7, 0, 9, 5, 4, -1],
+        [4, 0, 10, 4, 10, 5, 0, 3, 10, 6, 10, 7, 3, 7, 10, -1],
+        [7, 6, 10, 7, 10, 8, 5, 4, 10, 4, 8, 10, -1, -1, -1, -1],
+        [6, 9, 5, 6, 11, 9, 11, 8, 9, -1, -1, -1, -1, -1, -1, -1],
+        [3, 6, 11, 0, 6, 3, 0, 5, 6, 0, 9, 5, -1, -1, -1, -1],
+        [0, 11, 8, 0, 5, 11, 0, 1, 5, 5, 6, 11, -1, -1, -1, -1],
+        [6, 11, 3, 6, 3, 5, 5, 3, 1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 2, 10, 9, 5, 11, 9, 11, 8, 11, 5, 6, -1, -1, -1, -1],
+        [0, 11, 3, 0, 6, 11, 0, 9, 6, 5, 6, 9, 1, 2, 10, -1],
+        [11, 8, 5, 11, 5, 6, 8, 0, 5, 10, 5, 2, 0, 2, 5, -1],
+        [6, 11, 3, 6, 3, 5, 2, 10, 3, 10, 5, 3, -1, -1, -1, -1],
+        [5, 8, 9, 5, 2, 8, 5, 6, 2, 3, 8, 2, -1, -1, -1, -1],
+        [9, 5, 6, 9, 6, 0, 0, 6, 2, -1, -1, -1, -1, -1, -1, -1],
+        [1, 5, 8, 1, 8, 0, 5, 6, 8, 3, 8, 2, 6, 2, 8, -1],
+        [1, 5, 6, 2, 1, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 3, 6, 1, 6, 10, 3, 8, 6, 5, 6, 9, 8, 9, 6, -1],
+        [10, 1, 0, 10, 0, 6, 9, 5, 0, 5, 6, 0, -1, -1, -1, -1],
+        [0, 3, 8, 5, 6, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [10, 5, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [11, 5, 10, 7, 5, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [11, 5, 10, 11, 7, 5, 8, 3, 0, -1, -1, -1, -1, -1, -1, -1],
+        [5, 11, 7, 5, 10, 11, 1, 9, 0, -1, -1, -1, -1, -1, -1, -1],
+        [10, 7, 5, 10, 11, 7, 9, 8, 1, 8, 3, 1, -1, -1, -1, -1],
+        [11, 1, 2, 11, 7, 1, 7, 5, 1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 8, 3, 1, 2, 7, 1, 7, 5, 7, 2, 11, -1, -1, -1, -1],
+        [9, 7, 5, 9, 2, 7, 9, 0, 2, 2, 11, 7, -1, -1, -1, -1],
+        [7, 5, 2, 7, 2, 11, 5, 9, 2, 3, 2, 8, 9, 8, 2, -1],
+        [2, 5, 10, 2, 3, 5, 3, 7, 5, -1, -1, -1, -1, -1, -1, -1],
+        [8, 2, 0, 8, 5, 2, 8, 7, 5, 10, 2, 5, -1, -1, -1, -1],
+        [9, 0, 1, 5, 10, 3, 5, 3, 7, 3, 10, 2, -1, -1, -1, -1],
+        [9, 8, 2, 9, 2, 1, 8, 7, 2, 10, 2, 5, 7, 5, 2, -1],
+        [1, 3, 5, 3, 7, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 8, 7, 0, 7, 1, 1, 7, 5, -1, -1, -1, -1, -1, -1, -1],
+        [9, 0, 3, 9, 3, 5, 5, 3, 7, -1, -1, -1, -1, -1, -1, -1],
+        [9, 8, 7, 5, 9, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [5, 8, 4, 5, 10, 8, 10, 11, 8, -1, -1, -1, -1, -1, -1, -1],
+        [5, 0, 4, 5, 11, 0, 5, 10, 11, 11, 3, 0, -1, -1, -1, -1],
+        [0, 1, 9, 8, 4, 10, 8, 10, 11, 10, 4, 5, -1, -1, -1, -1],
+        [10, 11, 4, 10, 4, 5, 11, 3, 4, 9, 4, 1, 3, 1, 4, -1],
+        [2, 5, 1, 2, 8, 5, 2, 11, 8, 4, 5, 8, -1, -1, -1, -1],
+        [0, 4, 11, 0, 11, 3, 4, 5, 11, 2, 11, 1, 5, 1, 11, -1],
+        [0, 2, 5, 0, 5, 9, 2, 11, 5, 4, 5, 8, 11, 8, 5, -1],
+        [9, 4, 5, 2, 11, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [2, 5, 10, 3, 5, 2, 3, 4, 5, 3, 8, 4, -1, -1, -1, -1],
+        [5, 10, 2, 5, 2, 4, 4, 2, 0, -1, -1, -1, -1, -1, -1, -1],
+        [3, 10, 2, 3, 5, 10, 3, 8, 5, 4, 5, 8, 0, 1, 9, -1],
+        [5, 10, 2, 5, 2, 4, 1, 9, 2, 9, 4, 2, -1, -1, -1, -1],
+        [8, 4, 5, 8, 5, 3, 3, 5, 1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 4, 5, 1, 0, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [8, 4, 5, 8, 5, 3, 9, 0, 5, 0, 3, 5, -1, -1, -1, -1],
+        [9, 4, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [4, 11, 7, 4, 9, 11, 9, 10, 11, -1, -1, -1, -1, -1, -1, -1],
+        [0, 8, 3, 4, 9, 7, 9, 11, 7, 9, 10, 11, -1, -1, -1, -1],
+        [1, 10, 11, 1, 11, 4, 1, 4, 0, 7, 4, 11, -1, -1, -1, -1],
+        [3, 1, 4, 3, 4, 8, 1, 10, 4, 7, 4, 11, 10, 11, 4, -1],
+        [4, 11, 7, 9, 11, 4, 9, 2, 11, 9, 1, 2, -1, -1, -1, -1],
+        [9, 7, 4, 9, 11, 7, 9, 1, 11, 2, 11, 1, 0, 8, 3, -1],
+        [11, 7, 4, 11, 4, 2, 2, 4, 0, -1, -1, -1, -1, -1, -1, -1],
+        [11, 7, 4, 11, 4, 2, 8, 3, 4, 3, 2, 4, -1, -1, -1, -1],
+        [2, 9, 10, 2, 7, 9, 2, 3, 7, 7, 4, 9, -1, -1, -1, -1],
+        [9, 10, 7, 9, 7, 4, 10, 2, 7, 8, 7, 0, 2, 0, 7, -1],
+        [3, 7, 10, 3, 10, 2, 7, 4, 10, 1, 10, 0, 4, 0, 10, -1],
+        [1, 10, 2, 8, 7, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [4, 9, 1, 4, 1, 7, 7, 1, 3, -1, -1, -1, -1, -1, -1, -1],
+        [4, 9, 1, 4, 1, 7, 0, 8, 1, 8, 7, 1, -1, -1, -1, -1],
+        [4, 0, 3, 7, 4, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [4, 8, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [9, 10, 8, 10, 11, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [3, 0, 9, 3, 9, 11, 11, 9, 10, -1, -1, -1, -1, -1, -1, -1],
+        [0, 1, 10, 0, 10, 8, 8, 10, 11, -1, -1, -1, -1, -1, -1, -1],
+        [3, 1, 10, 11, 3, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 2, 11, 1, 11, 9, 9, 11, 8, -1, -1, -1, -1, -1, -1, -1],
+        [3, 0, 9, 3, 9, 11, 1, 2, 9, 2, 11, 9, -1, -1, -1, -1],
+        [0, 2, 11, 8, 0, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [3, 2, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [2, 3, 8, 2, 8, 10, 10, 8, 9, -1, -1, -1, -1, -1, -1, -1],
+        [9, 10, 2, 0, 9, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [2, 3, 8, 2, 8, 10, 0, 1, 8, 1, 10, 8, -1, -1, -1, -1],
+        [1, 10, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 3, 8, 9, 1, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 9, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 3, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]
+    ];
+
+    /**
+     * Edge table
+     */
+    const edgeTable = [
+        0x0, 0x109, 0x203, 0x30a, 0x406, 0x50f, 0x605, 0x70c,
+        0x80c, 0x905, 0xa0f, 0xb06, 0xc0a, 0xd03, 0xe09, 0xf00,
+        0x190, 0x99, 0x393, 0x29a, 0x596, 0x49f, 0x795, 0x69c,
+        0x99c, 0x895, 0xb9f, 0xa96, 0xd9a, 0xc93, 0xf99, 0xe90,
+        0x230, 0x339, 0x33, 0x13a, 0x636, 0x73f, 0x435, 0x53c,
+        0xa3c, 0xb35, 0x83f, 0x936, 0xe3a, 0xf33, 0xc39, 0xd30,
+        0x3a0, 0x2a9, 0x1a3, 0xaa, 0x7a6, 0x6af, 0x5a5, 0x4ac,
+        0xbac, 0xaa5, 0x9af, 0x8a6, 0xfaa, 0xea3, 0xda9, 0xca0,
+        0x460, 0x569, 0x663, 0x76a, 0x66, 0x16f, 0x265, 0x36c,
+        0xc6c, 0xd65, 0xe6f, 0xf66, 0x86a, 0x963, 0xa69, 0xb60,
+        0x5f0, 0x4f9, 0x7f3, 0x6fa, 0x1f6, 0xff, 0x3f5, 0x2fc,
+        0xdfc, 0xcf5, 0xfff, 0xef6, 0x9fa, 0x8f3, 0xbf9, 0xaf0,
+        0x650, 0x759, 0x453, 0x55a, 0x256, 0x35f, 0x55, 0x15c,
+        0xe5c, 0xf55, 0xc5f, 0xd56, 0xa5a, 0xb53, 0x859, 0x950,
+        0x7c0, 0x6c9, 0x5c3, 0x4ca, 0x3c6, 0x2cf, 0x1c5, 0xcc,
+        0xfcc, 0xec5, 0xdcf, 0xcc6, 0xbca, 0xac3, 0x9c9, 0x8c0,
+        0x8c0, 0x9c9, 0xac3, 0xbca, 0xcc6, 0xdcf, 0xec5, 0xfcc,
+        0xcc, 0x1c5, 0x2cf, 0x3c6, 0x4ca, 0x5c3, 0x6c9, 0x7c0,
+        0x950, 0x859, 0xb53, 0xa5a, 0xd56, 0xc5f, 0xf55, 0xe5c,
+        0x15c, 0x55, 0x35f, 0x256, 0x55a, 0x453, 0x759, 0x650,
+        0xaf0, 0xbf9, 0x8f3, 0x9fa, 0xef6, 0xfff, 0xcf5, 0xdfc,
+        0x2fc, 0x3f5, 0xff, 0x1f6, 0x6fa, 0x7f3, 0x4f9, 0x5f0,
+        0xb60, 0xa69, 0x963, 0x86a, 0xf66, 0xe6f, 0xd65, 0xc6c,
+        0x36c, 0x265, 0x16f, 0x66, 0x76a, 0x663, 0x569, 0x460,
+        0xca0, 0xda9, 0xea3, 0xfaa, 0x8a6, 0x9af, 0xaa5, 0xbac,
+        0x4ac, 0x5a5, 0x6af, 0x7a6, 0xaa, 0x1a3, 0x2a9, 0x3a0,
+        0xd30, 0xc39, 0xf33, 0xe3a, 0x936, 0x83f, 0xb35, 0xa3c,
+        0x53c, 0x435, 0x73f, 0x636, 0x13a, 0x33, 0x339, 0x230,
+        0xe90, 0xf99, 0xc93, 0xd9a, 0xa96, 0xb9f, 0x895, 0x99c,
+        0x69c, 0x795, 0x49f, 0x596, 0x29a, 0x393, 0x99, 0x190,
+        0xf00, 0xe09, 0xd03, 0xc0a, 0xb06, 0xa0f, 0x905, 0x80c,
+        0x70c, 0x605, 0x50f, 0x406, 0x30a, 0x203, 0x109, 0x0
+    ];
+
+    /**
+     * @param {number} x
+     * @param {number} y
+     * @param {number} z
+     * @returns {Object}
+     */
+    function vec3(x, y, z) {
+        return {
+            x: x,
+            y: y,
+            z: z
+        };
+    }
+
+    /**
+     * @param {Object} u
+     * @param {Object} v
+     * @returns {number}
+     */
+    function vdist2(u, v) {
+        let dx = u.x - v.x;
+        let dy = u.y - v.y;
+        let dz = u.z - v.z;
+        return dx * dx + dy * dy + dz * dz;
+    }
+
+    const cubeVerts = [
+        vec3(0, 0, 0),
+        vec3(1, 0, 0),
+        vec3(1, 1, 0),
+        vec3(0, 1, 0),
+        vec3(0, 0, 1),
+        vec3(1, 0, 1),
+        vec3(1, 1, 1),
+        vec3(0, 1, 1)
+    ];
+
+    const checks = [0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7];
+
+    const chunkSize = 16;
+
+    const isoLevel = 0.0;
+
+    function constrain(x, a, b) {
+        return x < a ? a : x > b ? b : x;
+    }
+
+    /**
+     * Class containing one chunk
+     * @class
+     */
+    class Chunk {
+        /**
+         * Create a new Chunk
+         * @constructor
+         * @param {number} x - The x coordinate of the chunk's origin
+         * @param {number} y - The y coordinate of the chunk's origin
+         * @param {number} z - The z coordinate of the chunk's origin
+         */
+        constructor(x, y, z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+
+            this.loading = true;
+            this.loadStep = 0;
+
+            /* WebGL data to be filled out */
+            this.vertices = [];
+            this.triangles = [];
+            this.normals = [];
+            this.colors = [];
+
+            /* Fill this up */
+            this.temporaryTris = [];
+
+            /* chunkSize^3 size array */
+            this.valueMap = [];
+        }
+
+        load () {
+            if (!this.loading) return;
+            if (this.loadStep < chunkSize - 1) {
+                /*
+                for (var i = 0; i < chunkSize - 1; i++) {
+                    for (var j = 0; j < chunkSize - 1; j++) {
+                        this.marchCube(i, j, this.loadStep);
+                    }
+                }*/
+                this.generateMesh();
+                this.loadStep = chunkSize-  1;
+            } else {
+                this.optimize();
+                this.generateColors();
+                this.loading = false;
+            }
+            this.loadStep ++;
+        }
+
+        
+
+        /**
+         * Get the value of a voxel
+         * @param {number} x
+         * @param {number} y
+         * @param {number} z
+         */
+        getValueAt(x, y, z) {
+            return this.valueMap[this.getIndex(x, y, z)];
+        }
+
+        /**
+         * Fill the value map based on a function
+         * @param {function} f
+         */
+        populateValueMap(f) {
+            for (var x = 0; x <= chunkSize; x++) {
+                for (var y = 0; y <= chunkSize; y++) {
+                    for (var z = 0; z <= chunkSize; z++) {
+                        this.valueMap[this.getIndex(x, y, z)] = f(this.x + x, this.y + y, this.z + z);
+                    }
+                }
+            }
+        }
+
+        /**
+         * Get a value blended between voxels
+         * @param {number} x
+         * @param {number} y
+         * @param {number} z
+         */
+        getValueInterpolated(x, y, z) {
+            x = constrain(x, 0, chunkSize - 0.001);
+            y = constrain(y, 0, chunkSize - 0.001);
+            z = constrain(z, 0, chunkSize - 0.001);
+
+            let x1 = Math.floor(x);
+            let y1 = Math.floor(y);
+            let z1 = Math.floor(z);
+
+            let fx = x - x1;
+            let fy = y - y1;
+            let fz = z - z1;
+
+            let c00 = this.getValueAt(x1, y1, z1) * (1 - fx) + this.getValueAt(x1 + 1, y1, z1) * fx;
+            let c01 = this.getValueAt(x1, y1, z1 + 1) * (1 - fx) + this.getValueAt(x1 + 1, y1, z1 + 1) * fx;
+            let c10 = this.getValueAt(x1, y1 + 1, z1) * (1 - fx) + this.getValueAt(x1 + 1, y1 + 1, z1) * fx;
+            let c11 = this.getValueAt(x1, y1 + 1, z1 + 1) * (1 - fx) + this.getValueAt(x1 + 1, y1 + 1, z1 + 1) * fx;
+
+            let c0 = c00 * (1 - fy) + c10 * fy;
+            let c1 = c01 * (1 - fy) + c11 * fy;
+
+            return c0 * (1 - fz) + c1 * fz;
+        }
+
+        /**
+         * Generate smooth normals
+         */
+        generateNormals() {
+            this.normals = [];
+            const n = this.vertices.length;
+            for (let i = 0; i < n; i += 3) {
+                let vx = this.vertices[i];
+                let vy = this.vertices[i + 1];
+                let vz = this.vertices[i + 2];
+
+                let gx = this.getValueInterpolated(vx + 0.5, vy, vz) - this.getValueInterpolated(vx - 0.5, vy, vz);
+                let gy = this.getValueInterpolated(vx, vy + 0.5, vz) - this.getValueInterpolated(vx, vy - 0.5, vz);
+                let gz = this.getValueInterpolated(vx, vy, vz + 0.5) - this.getValueInterpolated(vx, vy, vz - 0.5);
+
+                let gm = Math.sqrt(gx * gx + gy * gy + gz * gz);
+
+                if (gm === 0) {
+                    console.log("All zeroes");
+                    gx = 1;
+                    gm = 1;
+                }
+                gm = 1 / Math.sqrt(gm);
+
+                this.normals[i] = gx * gm;
+                this.normals[i + 1] = gy * gm;
+                this.normals[i + 2] = gz * gm;
+            }
+        }
+
+        /**
+         * Linearly interpolate between two vertices
+         * @param {number} iA
+         * @param {number} iB
+         * @param {number} ix
+         * @param {number} iy
+         * @param {number} iz
+         */
+        lerpVerts(iA, iB, ix, iy, iz) {
+            var v1 = this.getValueAt(
+                ix + cubeVerts[iA].x,
+                iy + cubeVerts[iA].y,
+                iz + cubeVerts[iA].z);
+            var v2 = this.getValueAt(
+                ix + cubeVerts[iB].x,
+                iy + cubeVerts[iB].y,
+                iz + cubeVerts[iB].z);
+            var f = (isoLevel - v1) / (v2 - v1);
+            var g = 1 - f;
+            return {
+                x: cubeVerts[iA].x * g + cubeVerts[iB].x * f + ix,
+                y: cubeVerts[iA].y * g + cubeVerts[iB].y * f + iy,
+                z: cubeVerts[iA].z * g + cubeVerts[iB].z * f + iz
+            };
+        }
+
+        /**
+         * Get the triangle configuration
+         * @param {number} ix
+         * @param {number} iy
+         * @param {number} iz
+         */
+        getConfig(ix, iy, iz) {
+            var c = 0;
+            c |= this.getValueAt(ix, iy, iz) < isoLevel;
+            c |= (this.getValueAt(ix + 1, iy, iz) < isoLevel) << 1;
+            c |= (this.getValueAt(ix + 1, iy + 1, iz) < isoLevel) << 2;
+            c |= (this.getValueAt(ix, iy + 1, iz) < isoLevel) << 3;
+            c |= (this.getValueAt(ix, iy, iz + 1) < isoLevel) << 4;
+            c |= (this.getValueAt(ix + 1, iy, iz + 1) < isoLevel) << 5;
+            c |= (this.getValueAt(ix + 1, iy + 1, iz + 1) < isoLevel) << 6;
+            c |= (this.getValueAt(ix, iy + 1, iz + 1) < isoLevel) << 7;
+            return c;
+        }
+
+        /**
+         * Run the marching cubes algorithm on a single voxel
+         * @param {number} ix
+         * @param {number} iy
+         * @param {number} iz
+         */
+        marchCube(ix, iy, iz) {
+            var cubeIndex = this.getConfig(ix, iy, iz);
+            var et = edgeTable[cubeIndex];
+            if (et === 0) {
+                return;
+            }
+            var nt = this.temporaryTris.length;
+            for (var i = 0; triTable[cubeIndex][i] !== -1 && i < 12; i += 3) {
+                var i1 = triTable[cubeIndex][i],
+                    i2 = triTable[cubeIndex][i + 1],
+                    i3 = triTable[cubeIndex][i + 2];
+                this.temporaryTris[nt] = [
+                    this.lerpVerts(checks[i1 * 2], checks[i1 * 2 + 1], ix, iy, iz),
+                    this.lerpVerts(checks[i2 * 2], checks[i2 * 2 + 1], ix, iy, iz),
+                    this.lerpVerts(checks[i3 * 2], checks[i3 * 2 + 1], ix, iy, iz)
+                ];
+                nt++;
+            }
+        }
+
+        /**
+         * Run the marching cubes algorithm on every voxel 
+         */
+        generateMesh() {
+            this.temporaryTris.length = 0;
+            for (var i = 0; i < chunkSize; i++) {
+                for (var j = 0; j < chunkSize; j++) {
+                    for (var k = 0; k < chunkSize; k++) {
+                        this.marchCube(i, j, k);
+                    }
+                }
+            }
+        }
+        /**
+         * Remove duplicate vertices and compile them into WebGL format 
+         */
+        optimize() {
+            /* Put into array */
+            let verts = [],
+                tris = [];
+            for (var i = 0; i < this.temporaryTris.length; i++) {
+                verts[i * 3] = this.temporaryTris[i][0];
+                verts[i * 3 + 1] = this.temporaryTris[i][1];
+                verts[i * 3 + 2] = this.temporaryTris[i][2];
+
+                tris[i * 3] = i * 3;
+                tris[i * 3 + 1] = i * 3 + 1;
+                tris[i * 3 + 2] = i * 3 + 2;
+            }
+
+            /* Remove duplicates */
+            let uniqueVerts = [];
+            let uniqueTris = [];
+            for (let i = 0; i < tris.length; i += 3) {
+                triLoop: for (let j = 0; j < 3; j++) {
+                    let vert = verts[tris[i + j]];
+                    for (let k = 0; k < uniqueVerts.length; k++) {
+                        if (vdist2(vert, uniqueVerts[k]) < 0.0001) {
+                            uniqueTris.push(k);
+                            continue triLoop;
+                        }
+                    }
+                    uniqueVerts.push(vert);
+                    uniqueTris.push(uniqueVerts.length - 1);
+                }
+            }
+
+            /* Expand vertices and add the chunk offset*/
+            let expandedVerts = [];
+            for (let i = 0; i < uniqueVerts.length; i++) {
+                expandedVerts[i * 3 + 0] = uniqueVerts[i].x + this.x;
+                expandedVerts[i * 3 + 1] = uniqueVerts[i].y + this.y;
+                expandedVerts[i * 3 + 2] = uniqueVerts[i].z + this.z;
+            }
+
+            /* cleanup */
+            verts = null;
+            tris = null;
+            uniqueVerts = null;
+
+            /* Set properties */
+            this.vertices = expandedVerts;
+            this.triangles = uniqueTris;
+        }
+
+        /**
+         * Calculate a color for each vertex
+         */
+        generateColors() {
+            this.colors.length = 0;
+            for (let i = 0; i < this.vertices.length; i += 3) {
+                var vx = this.vertices[i];
+                var vy = this.vertices[i + 1];
+                var vz = this.vertices[i + 2];
+
+                var c = noise(vx * 0.2, vy * 0.2, vz * 0.2);
+                this.colors[i] = c * 0.5;
+                this.colors[i+1] = c;
+                this.colors[i+2] = c * 0.5;
+            }
+        }
+
+        /**
+         * Draw a wireframe version of the chunk
+         * @param {number} t
+         */
+        drawDebug(t) {
+            var xyr = t / 1000.0;
+            var ct = Math.cos(xyr);
+            var st = Math.sin(xyr);
+
+            const n = this.triangles.length;
+
+            ctx.fillStyle = "#FFFFFF";
+            ctx.fillRect(0, 0, 600, 600);
+            ctx.lineWidth = 1;
+            for (var i = 0; i < n; i += 3) {
+                ctx.beginPath();
+                for (var j = 0; j < 3; j++) {
+                    var vx = this.vertices[this.triangles[i + j] * 3 + 0];
+                    var vy = this.vertices[this.triangles[i + j] * 3 + 1];
+                    var vz = this.vertices[this.triangles[i + j] * 3 + 2];
+
+                    var ox = (vx - chunkSize / 2) * ct - (vz - chunkSize / 2) * st;
+                    var oy = (vy - chunkSize / 2);
+                    var oz = (vx - chunkSize / 2) * st + (vz - chunkSize / 2) * ct;
+
+                    var sx = ox / (oz + 50.0) * 1000 + 300;
+                    var sy = oy / (oz + 50.0) * 1000 + 300;
+
+                    ctx.lineTo(sx, sy);
+
+                }
+                ctx.closePath();
+                ctx.stroke();
+            }
+        }
+
+        /**
+         * Draw a wireframe representation of the normals 
+         * @param {number} t
+         */
+        drawNormals(t) {
+            var xyr = t / 1000.0;
+            var ct = Math.cos(xyr);
+            var st = Math.sin(xyr);
+
+            ctx.strokeStyle = "#FF0000";
+            ctx.lineWidth = 2;
+
+            const n = this.vertices.length / 3.0;
+
+            for (let i = 0; i < n; i++) {
+
+                var vx = this.vertices[i * 3 + 0];
+                var vy = this.vertices[i * 3 + 1];
+                var vz = this.vertices[i * 3 + 2];
+
+                var nx = this.normals[i * 3 + 0] * ct - this.normals[i * 3 + 2] * st;
+                var ny = this.normals[i * 3 + 1];
+                var nz = this.normals[i * 3 + 2] * st + this.normals[i * 3 + 2] * ct;
+
+                var ox = (vx - chunkSize / 2) * ct - (vz - chunkSize / 2) * st;
+                var oy = (vy - chunkSize / 2);
+                var oz = (vx - chunkSize / 2) * st + (vz - chunkSize / 2) * ct;
+
+                var x1 = ox / (oz + 50.0) * 1000 + 300;
+                var y1 = oy / (oz + 50.0) * 1000 + 300;
+                var x2 = (ox + nx * 100.0) / (oz + nz * 100.0 + 50.0) * 1000 + 300;
+                var y2 = (oy + ny * 100.0) / (oz + nz * 100.0 + 50.0) * 1000 + 300;
+
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+
+            }
+        }
+    }
+
+    /**
+     * @param {WebGLRenderingContext} gl
+     * @param {string} id
+     * @param {number} type
+     */
+    function loadShaderById(gl, type, id) {
+        const vsSource = document.getElementById(id).text;
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, vsSource);
+        gl.compileShader(shader);
+        return shader;
+    }
+
+    /**
+     * @param {WebGLRenderingContext} gl
+     * @param {string} vertexId
+     * @param {string} fragmentId
+     * @returns {WebGLProgram}
+     */
+    function loadProgram(gl, vertexId, fragmentId) {
+        const vertexShader = loadShaderById(gl, gl.VERTEX_SHADER, vertexId);
+        const fragmentShader = loadShaderById(gl, gl.FRAGMENT_SHADER, fragmentId);
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+        return program;
+    }
+
+    /**
+     * 4x4 matrix library 
+     */
+    class m4 {
+        /**
+         * Create a new perspective matrix
+         * @param {number} fov
+         * @param {number} aspect
+         * @param {number} near
+         * @param {number} far
+         * @returns {number[]}
+         */
+        static perspective (fov, aspect, near, far) {
+            var f = Math.tan(Math.PI * 0.5 - 0.5 * fov);
+            var rangeInv = 1.0 / (near - far);
+            return [
+                f / aspect, 0, 0, 0,
+                0, f, 0, 0,
+                0, 0, (near + far) * rangeInv, -1,
+                0, 0, near * far * rangeInv * 2, 0
+            ];
+        }
+
+        /**
+         * Create a new projection matrix
+         * @param {number} width
+         * @param {number} height
+         * @param {number} depth
+         * @returns {number[]}
+         */
+        static projection (width, height, depth) {
+            // Note: This matrix flips the Y axis so 0 is at the top.
+            return [
+                2 / width, 0, 0, 0,
+                0, -2 / height, 0, 0,
+                0, 0, 2 / depth, 0,
+                -1, 1, 0, 1,
+            ];
+        }
+
+        /**
+         * Multiply two matrices
+         * @param {number[]} a
+         * @param {number[]} b
+         */
+        static multiply(a, b) {
+            var a00 = a[0 * 4 + 0];
+            var a01 = a[0 * 4 + 1];
+            var a02 = a[0 * 4 + 2];
+            var a03 = a[0 * 4 + 3];
+            var a10 = a[1 * 4 + 0];
+            var a11 = a[1 * 4 + 1];
+            var a12 = a[1 * 4 + 2];
+            var a13 = a[1 * 4 + 3];
+            var a20 = a[2 * 4 + 0];
+            var a21 = a[2 * 4 + 1];
+            var a22 = a[2 * 4 + 2];
+            var a23 = a[2 * 4 + 3];
+            var a30 = a[3 * 4 + 0];
+            var a31 = a[3 * 4 + 1];
+            var a32 = a[3 * 4 + 2];
+            var a33 = a[3 * 4 + 3];
+            var b00 = b[0 * 4 + 0];
+            var b01 = b[0 * 4 + 1];
+            var b02 = b[0 * 4 + 2];
+            var b03 = b[0 * 4 + 3];
+            var b10 = b[1 * 4 + 0];
+            var b11 = b[1 * 4 + 1];
+            var b12 = b[1 * 4 + 2];
+            var b13 = b[1 * 4 + 3];
+            var b20 = b[2 * 4 + 0];
+            var b21 = b[2 * 4 + 1];
+            var b22 = b[2 * 4 + 2];
+            var b23 = b[2 * 4 + 3];
+            var b30 = b[3 * 4 + 0];
+            var b31 = b[3 * 4 + 1];
+            var b32 = b[3 * 4 + 2];
+            var b33 = b[3 * 4 + 3];
+            return [
+                b00 * a00 + b01 * a10 + b02 * a20 + b03 * a30,
+                b00 * a01 + b01 * a11 + b02 * a21 + b03 * a31,
+                b00 * a02 + b01 * a12 + b02 * a22 + b03 * a32,
+                b00 * a03 + b01 * a13 + b02 * a23 + b03 * a33,
+                b10 * a00 + b11 * a10 + b12 * a20 + b13 * a30,
+                b10 * a01 + b11 * a11 + b12 * a21 + b13 * a31,
+                b10 * a02 + b11 * a12 + b12 * a22 + b13 * a32,
+                b10 * a03 + b11 * a13 + b12 * a23 + b13 * a33,
+                b20 * a00 + b21 * a10 + b22 * a20 + b23 * a30,
+                b20 * a01 + b21 * a11 + b22 * a21 + b23 * a31,
+                b20 * a02 + b21 * a12 + b22 * a22 + b23 * a32,
+                b20 * a03 + b21 * a13 + b22 * a23 + b23 * a33,
+                b30 * a00 + b31 * a10 + b32 * a20 + b33 * a30,
+                b30 * a01 + b31 * a11 + b32 * a21 + b33 * a31,
+                b30 * a02 + b31 * a12 + b32 * a22 + b33 * a32,
+                b30 * a03 + b31 * a13 + b32 * a23 + b33 * a33,
+            ];
+        }
+
+        /**
+         * Create a translation matrix
+         * @param {number} tx
+         * @param {number} ty
+         * @param {number} tz
+         */
+        static translation(tx, ty, tz) {
+            return [
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                tx, ty, tz, 1,
+            ];
+        }
+
+        /**
+         * Create a rotation around the x axis
+         * @param {number} theta
+         */
+        static xRotation(theta) {
+            var c = Math.cos(theta);
+            var s = Math.sin(theta);
+
+            return [
+                1, 0, 0, 0,
+                0, c, s, 0,
+                0, -s, c, 0,
+                0, 0, 0, 1,
+            ];
+        }
+
+        /**
+         * Create a rotation around the y axis
+         * @param {number} theta
+         */
+        static yRotation(theta) {
+            var c = Math.cos(theta);
+            var s = Math.sin(theta);
+
+            return [
+                c, 0, -s, 0,
+                0, 1, 0, 0,
+                s, 0, c, 0,
+                0, 0, 0, 1,
+            ];
+        }
+
+        /**
+         * Create a rotation around the z axis
+         * @param {number} theta
+         */
+        static zRotation(theta) {
+            var c = Math.cos(theta);
+            var s = Math.sin(theta);
+
+            return [
+                c, s, 0, 0,
+                -s, c, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1,
+            ];
+        }
+
+        /**
+         * Create a scaling matrix
+         * @param {number} sx
+         * @param {number} sy
+         * @param {number} sz
+         */
+        static scaling(sx, sy, sz) {
+            return [
+                sx, 0, 0, 0,
+                0, sy, 0, 0,
+                0, 0, sz, 0,
+                0, 0, 0, 1,
+            ];
+        }
+
+        /**
+         * Translate a matrix
+         * @param {number[]} m
+         * @param {number} tx
+         * @param {number} ty
+         * @param {number} tz
+         */
+        static translate(m, tx, ty, tz) {
+            return this.multiply(m, this.translation(tx, ty, tz));
+        }
+
+        /**
+         * Rotate a matrix around the x axis
+         * @param {number[]} m
+         * @param {number} theta
+         */
+        static xRotate(m, theta) {
+            return this.multiply(m, this.xRotation(theta));
+        }
+
+        /**
+         * Rotate a matrix around the y axis
+         * @param {number[]} m
+         * @param {number} theta
+         */
+        static yRotate (m, theta) {
+            return this.multiply(m, this.yRotation(theta));
+        }
+
+        /**
+         * Rotate a matrix around the y axis
+         * @param {number[]} m
+         * @param {number} theta
+         */
+        static zRotate (m, theta) {
+            return this.multiply(m, this.zRotation(theta));
+        }
+
+        /**
+         * Scale a matrix
+         * @param {number[]} m
+         * @param {number} sx
+         * @param {number} sy
+         * @param {number} sz
+         */
+        static scale (m, sx, sy, sz) {
+            return this.multiply(m, this.scaling(sx, sy, sz));
+        }
+    };
+
+    /**
+     * Input class
+     */
+    class Input {
+        static mouseX = 0;
+        static mouseY = 0;
+
+        static movementX = 0;
+        static movementY = 0;
+
+        static mouseDown = false;
+        static mouseButton = 0;
+        static keys = {};
+
+        static mouseLocked = false;
+
+        static initialize () {
+            var self = this;
+            canvas.onmousedown = function (e) {
+                self.mouseButton = e.button;
+                self.mouseDown = true;
+
+                if (!self.mouseLocked) {
+                    if (canvas.requestPointerLock) {
+                        canvas.requestPointerLock();
+                        self.mouseLocked = true;
+                    } else if (canvas.mozRequestPointerLock) {
+                        canvas.mozRequestPointerLock();
+                        self.mouseLocked = true;
+                    } else if (canvas.webkitRequestPointerLock) {
+                        canvas.webkitRequestPointerLock();
+                        self.mouseLocked = true;
+                    }
+                }
+            };
+            canvas.onmouseup = function (e) {
+                self.mouseDown = false;
+            }
+            canvas.onmousemove = function (e) {
+                self.mouseX += e.x;
+                self.mouseY += e.y;
+                self.movementX += e.movementX;
+                self.movementY += e.movementY;
+            };
+            document.onkeydown = function (e) {
+                self.keys[e.key.toLowerCase()] = true;
+            };
+            document.onkeyup = function (e) {
+                self.keys[e.key.toLowerCase()] = false;
+            };
+        }
+
+        static update () {
+            this.movementX = 0;
+            this.movementY = 0;
+        }
+    }
+
+    
+
+    class Program {
+        /**
+         * @param {WebGLRenderingContext} gl
+         */
+        constructor(gl) {
+            /* Setup program */
+            this.gl = gl;
+            this.program = loadProgram(this.gl, "terrain-vertex", "terrain-fragment");
+            this.gl.useProgram(this.program);
+
+            /* uniform locations */
+            this.uniformLocations = {
+                uProjection: this.gl.getUniformLocation(this.program, "uProjection"),
+            };
+
+            /* attribute locations */
+            this.attribLocations = {
+                aPosition: this.gl.getAttribLocation(this.program, "aPosition"),
+                aColor: this.gl.getAttribLocation(this.program, "aColor")
+            };
+
+            /* initialize buffers */
+            this.vertexBuffer = this.gl.createBuffer();
+            this.colorBuffer = this.gl.createBuffer();
+            this.indexBuffer = this.gl.createBuffer();
+            
+            this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+
+            /* connect buffers to attributes */
+            this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
+            this.gl.vertexAttribPointer(this.attribLocations.aPosition, 3, gl.FLOAT, false, 12, 0);
+            this.gl.enableVertexAttribArray(this.attribLocations.aPosition);
+
+            this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.colorBuffer);
+            this.gl.vertexAttribPointer(this.attribLocations.aColor, 3, gl.FLOAT, false, 12, 0);
+            this.gl.enableVertexAttribArray(this.attribLocations.aColor);
+
+            /* clearing parameters */
+            this.gl.clearColor(1.0, 0.5, 0.5, 1.0);
+            this.gl.clearDepth(1.0);
+            
+            this.gl.enable(this.gl.DEPTH_TEST);
+            this.gl.depthFunc(this.gl.LEQUAL);
+            
+            /* geometry data */
+            this.verts = [];
+            this.tris = [];
+            this.colors = [];
+
+            this.chunkIndices = [];
+        }
+
+        /**
+         * Add a chunk to the geometry data
+         * @param {Chunk} chunk
+         */
+        addChunk(chunk) {
+
+            /* Starting vertex */
+            let n = this.verts.length / 3;
+            
+            this.chunkIndices[[chunk.x / chunkSize, chunk.y / chunkSize, chunk.z / chunkSize]] = {
+                startingVert: this.verts.length,
+                startingColor: this.colors.length,
+                startingTri: this.tris.length,
+
+                numVerts: chunk.vertices.length,
+                numColors: chunk.colors.length,
+                numTris: chunk.triangles.length
+            };
+
+            this.verts = this.verts.concat(chunk.vertices);
+            this.colors = this.colors.concat(chunk.colors);
+
+            console.log(this.verts.length);
+
+            for (let i = 0; i < chunk.triangles.length; i ++) {
+                this.tris.push(chunk.triangles[i] + n);
+            }
+        }
+
+        removeChunk(chunk) {
+            //let chunkIndex = 
+        }
+
+        /**
+         * Calculate the projection matrix
+         * @param {Player} player
+         */
+        setMatrix(player) {
+            /* Calculate projection matrix */
+            let aspect = glCanvas.width / glCanvas.height;
+            let zNear = 0.1;
+            let zFar = 1000;            
+            let matrix = m4.perspective(90, 1, zNear, zFar);
+            matrix = m4.xRotate(matrix, player.pitch);
+            matrix = m4.yRotate(matrix, player.yaw);
+            matrix = m4.translate(matrix, -player.x, -player.y, -player.z);
+
+            this.gl.uniformMatrix4fv(this.uniformLocations.uProjection, false, matrix);
+        }
+        
+
+        /**
+         * Add the geometry data to the WebGL buffer
+         */
+        resetBuffers() {
+            this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+            this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(this.tris), this.gl.DYNAMIC_DRAW);
+            
+            /* fill buffers with geometry data */
+            this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.colorBuffer);
+            this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array(this.colors), this.gl.DYNAMIC_DRAW);           
+
+            this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
+            this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array(this.verts), this.gl.DYNAMIC_DRAW);
+
+            
+        }
+
+        /**
+         * Render the geometry data
+         */
+        render() {
+            /* Clear screen and draw triangles */
+            this.gl.useProgram(this.program);
+            this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
+                       
+            this.gl.drawElements(this.gl.TRIANGLES, this.tris.length, this.gl.UNSIGNED_SHORT, 0);
+        }
+    }
+
+    class Player {
+        constructor(x, y, z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+
+            this.vx = 0;
+            this.vy = 0;
+            this.vz = 0;
+
+            this.pitch = 0;
+            this.yaw = 0;
+
+            this.FOV = Math.PI * 0.5;
+        }
+
+        /**
+         * Constrain the player's pitch
+         */
+        constrainPitch() {
+            this.pitch = constrain(this.pitch, -Math.PI / 2, Math.PI / 2);
+        }
+
+        /**
+         * Apply a drag force to the player
+         * @param {number} amt
+         */
+        applyDrag(amt) {
+            this.vx *= amt;
+            this.vy *= amt;
+            this.vz *= amt;
+        }
+
+        /**
+         * Determine if the player is inside a chunk
+         * @param {Chunk} chunk
+         */
+        isInsideChunk(chunk) {
+            return  this.x > chunk.x - 1 && 
+                    this.y > chunk.y - 1 && 
+                    this.z > chunk.z - 1 && 
+                    this.x < chunk.x + chunkSize + 1 && 
+                    this.y < chunk.y + chunkSize + 1 && 
+                    this.z < chunk.z + chunkSize + 1;
+        }
+
+        /**
+         * Collide the player with a triangle
+         * @param {number[]} tri
+         */
+        collideWithTriangle(tri) {
+
+        }
+
+        /**
+         * Collide the player with a chunk
+         * @param {Chunk} chunk
+         */
+        collideWithChunk(chunk) {
+            if (this.isInsideChunk(chunk)) {
+                for (let dx = -1; dx <= 1; dx ++) {
+                    for (let dy = -1; dy <= 1; dy ++) {
+                        for (let dz = -1; dz <= 1; dz ++) {
+
+
+
+                        }
+                    }
+                }
+            }
+        }
+
+        controls() {
+            this.yaw += (Input.movementX) / globWidth * Math.PI;
+            this.pitch += (Input.movementY) / globHeight * Math.PI;
+            this.constrainPitch();
+
+            if (Input.keys.w) {
+                this.x += Math.sin(this.yaw) * 0.1;
+                this.z -= Math.cos(this.yaw) * 0.1;
+            }
+
+            if (Input.keys.s) {
+                this.x -= Math.sin(this.yaw) * 0.1;
+                this.z += Math.cos(this.yaw) * 0.1;
+            }
+
+            if (Input.keys.d) {
+                this.x += Math.cos(this.yaw) * 0.1;
+                this.z += Math.sin(this.yaw) * 0.1;
+            }
+
+            if (Input.keys.a) {
+                this.x -= Math.cos(this.yaw) * 0.1;
+                this.z -= Math.sin(this.yaw) * 0.1;
+            }
+
+            if (Input.keys[" "]) {
+                this.y += 0.1;
+            }
+
+            if (Input.keys.shift) {
+                this.y -= 0.1;
+            }
+        }
+    }
+
+    class World {
+        /**
+         * Create a new World object
+         * @param {Program} program
+         * @param {Function} f
+         */
+        constructor (program, f) {
+            this.program = program;
+            this.loadQueue = [];
+            this.chunks = {};
+            this.player = new Player(0, -20, 0);
+            
+            this.mapFunc = f;
+        }
+        /**
+         * Get the index of a chunk
+         */
+        indexOfChunk (chunk) {
+            return [chunk.x / chunkSize, chunk.y / chunkSize, chunk.z / chunkSize];
+        }
+
+        /**
+         * Go through the loading queue
+         */
+        loadChunks () {
+            if (!this.loadQueue.length) return;
+            console.log(this.loadQueue.length);
+            for (var i = 0; i < 20; i ++) {
+                if (!this.loadQueue.length) {
+                    this.program.resetBuffers();
+                    return;
+                }
+                this.loadQueue[0].load();
+                if (!this.loadQueue[0].loading) {
+                    var chunk = this.loadQueue.shift();
+                    this.program.addChunk(chunk);
+                    this.chunks[this.indexOfChunk(chunk)] = chunk;
+                }
+            }
+            this.program.resetBuffers();
+        }
+
+        /**
+         * Determine if a chunk exists at a specific location
+         * @param {number} cx
+         * @param {number} cy
+         * @param {number} cz
+         */
+        chunkExists (cx, cy, cz) {
+            for (var i = 0; i < this.loadQueue.length; i ++) {
+                var lc = this.loadQueue[i];
+                if (lc.x === cx && lc.y === cy && lc.z === cz) {
+                    return true;
+                }
+            }
+            return !!this.chunks[[cx / chunkSize, cy / chunkSize, cz / chunkSize]];
+        }
+
+        /**
+         * Add new chunks to the loading queue
+         */
+        fillLoadingQueue () {
+            let cx = Math.floor(this.player.x / chunkSize) * chunkSize;
+            let cy = Math.floor(this.player.y / chunkSize) * chunkSize;
+            let cz = Math.floor(this.player.z / chunkSize) * chunkSize;
+
+            let spread = 1;
+
+            for (let dx = -spread; dx <= spread; dx ++) {
+                for (let dy = -spread; dy <= spread; dy ++) {
+                    for (let dz = -spread; dz <= spread; dz ++) {
+                        var nx = cx + dx * chunkSize;
+                        var ny = cy + dy * chunkSize;
+                        var nz = cz + dz * chunkSize;
+                        if (!this.chunkExists(nx, ny, nz)) {
+                            console.log(nx, ny, nz);
+                            let chunk = new Chunk(nx, ny, nz);
+                            chunk.populateValueMap(this.mapFunc);
+                            this.loadQueue.push(chunk);
+                        }
+                    }
+                }
+            }
+
+            this.sortLoadingQueue();
+        }
+        sortLoadingQueue () {
+            var p = this.player;
+            this.loadQueue.sort((a, b) => {
+                var ax = a.x - p.x;
+                var ay = a.y - p.y;
+                var az = a.z - p.z;
+
+                var bx = b.x - p.x;
+                var by = b.y - p.y;
+                var bz = b.z - p.z;
+
+                return (ax * ax + ay * ay + az * az - bx * bx - by * by - bz * bz);
+            });
+        }
+
+        runPlayer () {
+            this.player.controls();
+        }
+    }
+
+    /**
+     * @param {number} startTime
+     */
+    function main(startTime) {
+        // This code runs once
+        Input.initialize();
+        noiseSeed(0);
+
+        var program = new Program(gl);
+
+        function worldMap (x, y, z) {            
+            var rm = Math.sqrt(x * x + y * y + z * z);
+            var n = noise(x * 0.01, y * 0.01, z * 0.01) - 0.5;
+            n += (noise(x * 0.1, y * 0.1, z * 0.1) - 0.5) * 0.5;
+
+            var caveNoise = Math.exp(-Math.abs(noise(x * 0.02, y * 0.02, z * 0.02) - 0.5) * 10);
+
+            return n - constrain(y * 0.02, -1, 1) - caveNoise;
+        }
+
+        var world = new World(program, worldMap);
+
+        var then = startTime * 0.001;
+        var fps = 60;
+
+        /**
+         * This function runs each frame
+         * @param {number} now
+         */
+        function render(now) {           
+
+            world.runPlayer();
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            world.fillLoadingQueue();
+            
+            world.loadChunks();
+
+            program.setMatrix(world.player);
+            
+            program.render();
+            
+            /* Calculate FPS */
+            fps = 1000 / (now - then);
+            then = now;
+
+            /* Draw FPS */
+            ctx.fillStyle = "#FF0000";
+            ctx.font = "30px Arial";
+            ctx.textAlign = "left";
+            ctx.fillText(fps.toFixed(2), 10, 25);
+            
+            Input.update();
+            
+            requestAnimationFrame(render);
+        }
+
+        requestAnimationFrame(render);
+    }
+
+    requestAnimationFrame(main);
+
+};
+
+    </script>
+
+    <script>
+        MarchingCubes();
+    </script>
+</html>

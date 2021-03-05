@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>shader testing</title>
+    <style>
+        * {
+            margin: 0px;
+            padding: 0px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gl-output"></canvas>
+
+    <script type="text/glsl" id="generic-vertex">
+        attribute vec2 aPosition;
+        void main() {
+            gl_Position = vec4(aPosition.xy, 0.0, 1.0);
+        }
+    </script>
+
+    <script type="text/glsl" id="random-fragment">
+        precision highp float;
+
+        float rand(vec2 n) {
+            return fract(sin(dot(n, vec2(12.9898, 4.1414))) * 43758.5453);
+        }
+
+        const vec2 o1 = vec2(1134.764, 0.54);
+        const vec2 o2 = vec2(10.21341, 531.4);
+
+        void main() {
+            gl_FragColor = vec4(rand(gl_FragCoord.xy), rand(gl_FragCoord.xy + o1), rand(gl_FragCoord.xy + o2), 1.0);
+        }
+    </script>
+
+    <script type="text/glsl" id="worley-fragment">
+        precision highp float;
+
+        uniform sampler2D uRandom;
+        uniform vec2 uScale;
+        uniform int uN;
+        uniform float uZ;
+
+        int uN2 = int(sqrt(float(uN)));
+
+        int mod (int x, int y) {
+            return int(mod(float(x), float(y)));
+        }
+
+        vec3 getOffset (ivec3 p) {
+            vec2 offset = vec2(p.xy) / float(uN) / float(uN2);
+            vec2 start = vec2(
+                float(mod(p.z, uN2)) / float(uN2),
+                floor(float(p.z) / float(uN2)) / float(uN2)
+            );
+            return texture2D(uRandom, offset + start).xyz;
+        }
+
+        vec3 getPoint (ivec3 p) {
+            return vec3(p) + getOffset(p);
+        }
+
+        float getTextureValue (vec3 pos) {
+            ivec3 p = ivec3(floor(pos));
+
+            float smallest = 9999.0;
+
+            for (int dx = -1; dx <= 1; dx ++) {
+                for (int dy = -1; dy <= 1; dy ++) {
+                    for (int dz = -1; dz <= 1; dz ++) {
+
+                        ivec3 newPoint = ivec3(
+                            mod(p.x + dx + uN, uN),
+                            mod(p.y + dy + uN, uN),
+                            mod(p.z + dz + uN, uN)
+                        );
+
+                        vec3 point = getPoint(newPoint);
+
+                        point.x += (p.x + dx < 0) ? -float(uN) : (p.x + dx >= uN) ? float(uN) : 0.0;
+                        point.y += (p.y + dy < 0) ? -float(uN) : (p.y + dy >= uN) ? float(uN) : 0.0;
+                        point.z += (p.z + dz < 0) ? -float(uN) : (p.z + dz >= uN) ? float(uN) : 0.0;
+
+                        point -= pos;
+
+                        smallest = min(smallest, dot(point, point));
+
+                    }
+                }
+            }
+
+            smallest = max(1.0 - sqrt(smallest), 0.0);
+            return smallest;
+        }
+
+        void main() {
+            vec2 uv = gl_FragCoord.xy * uScale;
+
+            vec3 pos = vec3(uv * float(uN), uZ);
+
+            float c = 0.0;
+            float scl = 1.0;
+
+            for (int i = 0; i < 10; i ++) {
+                vec3 samplePoint = mod(pos / scl, float(uN));
+                c += 0.5 * scl * getTextureValue(samplePoint);
+                scl *= 0.5;
+            }
+
+            float threshold = 0.4;
+            c = max(c - threshold, 0.0) / (1.0 - threshold);
+
+            gl_FragColor = vec4(c, c, c, 1.0);
+        }
+    </script>
+
+    <script type="application/javascript">
+        var globWidth = 512;
+        var globHeight = 512;
+        function ShaderTesting () {
+
+            // Has to be a square
+            const N = 4 ** 2;
+
+            const canvas = document.querySelector("#gl-output");
+            canvas.width = globWidth;
+            canvas.height = globHeight;
+
+            /**
+             * Get WebGL context
+             * @type {WebGLRenderingContext}
+             */
+            const gl = canvas.getContext("webgl");
+            gl.viewport(0, 0, globWidth, globHeight);
+
+            const worleyrandom = {
+                initialize: function () {
+                    this.program = loadProgram(gl, "generic-vertex", "random-fragment");
+
+                    this.attribLocations = {
+                        aPosition: gl.getAttribLocation(this.program, "aPosition")
+                    };
+
+                    gl.enableVertexAttribArray(this.attribLocations.aPosition);
+
+                    this.positionBuffer = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+                    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+                    gl.vertexAttribPointer(this.attribLocations.position, 2, gl.FLOAT, false, 0, 0);
+                },
+
+                render: function () {
+                    gl.useProgram(this.program);
+                    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+                },
+            };
+
+            const worley = {
+                initialize: function () {
+                    this.zoff = 0.0;
+
+                    this.program = loadProgram(gl, "generic-vertex", "worley-fragment");
+                    gl.useProgram(this.program);
+
+                    this.uniformLocations = {
+                        uScale: gl.getUniformLocation(this.program, "uScale"),
+                        uN: gl.getUniformLocation(this.program, "uN"),
+                        uZ: gl.getUniformLocation(this.program, "uZ"),
+                        uRandom: gl.getUniformLocation(this.program, "uRandom")
+                    };
+
+                    gl.uniform2f(this.uniformLocations.uScale, 1 / globWidth, 1 / globHeight);
+                    gl.uniform1i(this.uniformLocations.uN, N);
+                    gl.uniform1f(this.uniformLocations.uZ, this.zoff);
+
+                    this.attribLocations = {
+                        aPosition: gl.getAttribLocation(this.program, "aPosition")
+                    };
+
+                    gl.enableVertexAttribArray(this.attribLocations.aPosition);
+
+                    this.positionBuffer = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+                    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+                    gl.vertexAttribPointer(this.attribLocations.position, 2, gl.FLOAT, false, 0, 0);
+
+                    let texWidth = N * Math.sqrt(N);
+                    let texHeight = N * Math.sqrt(N);
+
+                    gl.activeTexture(gl.TEXTURE0);
+                    this.randomTexture = gl.createTexture();
+                    gl.bindTexture(gl.TEXTURE_2D, this.randomTexture);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, texWidth, texHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+                    gl.uniform1i(this.uniformLocations.uRandom, 0);
+
+                    // Render the texture
+                    this.randomFramebuffer = gl.createFramebuffer();
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, this.randomFramebuffer);
+                    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.randomTexture, 0);
+                    gl.viewport(0, 0, texWidth, texHeight);
+                    worleyrandom.render();
+
+                    gl.viewport(0, 0, globWidth, globHeight);
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                },
+
+                updateOffset: function () {
+                    this.zoff += 0.01;
+                    if (this.zoff >= N) this.zoff = 0;
+                    gl.uniform1f(this.uniformLocations.uZ, this.zoff);
+                },
+            };
+
+            worleyrandom.initialize();
+            worley.initialize();
+
+            /**
+             * Animation loop
+             */
+            function render () {
+                gl.useProgram(worley.program);
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+                worley.updateOffset();
+
+                requestAnimationFrame(render);
+            }
+
+            /**
+             * Load a new WebGL shader
+             * @param {WebGLRenderingContext} gl
+             * @param {string} id
+             * @param {number} type
+             * @returns {WebGLShader}
+             */
+            function loadShaderById(gl, type, id) {
+                const vsSource = document.getElementById(id).textContent.trim();
+                console.log(vsSource);
+                const shader = gl.createShader(type);
+                gl.shaderSource(shader, vsSource);
+                gl.compileShader(shader);
+                return shader;
+            }
+
+            /**
+             * Load a WebGL program
+             * @param {WebGLRenderingContext} gl
+             * @param {string} vertexId
+             * @param {string} fragmentId
+             * @returns {WebGLProgram}
+             */
+            function loadProgram(gl, vertexId, fragmentId) {
+                const vertexShader = loadShaderById(gl, gl.VERTEX_SHADER, vertexId);
+                const fragmentShader = loadShaderById(gl, gl.FRAGMENT_SHADER, fragmentId);
+                const program = gl.createProgram();
+                gl.attachShader(program, vertexShader);
+                gl.attachShader(program, fragmentShader);
+                gl.linkProgram(program);
+                return program;
+            }
+
+            render();
+        }
+    </script>
+    <script>
+        ShaderTesting();
+    </script>
+</body>
+</html>

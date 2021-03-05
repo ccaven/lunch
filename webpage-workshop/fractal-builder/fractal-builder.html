@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en" class="h-100">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+        <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+        <title>New webpage</title>
+
+        <style>
+            html, body {
+                font-size: 0.9em;
+                display: noxne;
+            }
+            #cardsPanel {
+                overflow-y: auto;
+                height: 620px;
+            }
+            #canvas {
+                height: 710px;
+            }
+            .modal {
+                font-size: 1.2em;
+            }
+        </style>
+    </head>
+    <body class="d-flex flex-column h-100">
+    <main role="main" class="flex-shrink-0">
+        <div class="container">
+            <!-- Presets Modal -->
+            <div class="modal fade" id="presetsModal" tabindex="-1" aria-labelledby="presetsModalLabel" aria-hidden="true">
+              <div class="modal-dialog">
+                <div class="modal-content">
+                  <div class="modal-header bg-secondary text-light">
+                    <h5 class="modal-title" id="presetsModalLabel">Presets</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                      <span aria-hidden="true">&times;</span>
+                    </button>
+                  </div>
+                  <div class="modal-body">
+                    <p>You can start your model with one of the presets listed below. If you do decide to use a preset then all your existing settings and cards will be replaced by the preset settings/cards. You will then be able to change the preset settings and add additional cards if you wish.</p>
+                    <p>You don't have to use a preset. You can decide to add your own cards and apply the appropriate settings.</p>
+
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="presetRadios" id="presetRadiosMandelbox" value="mandelbox">
+                        <label class="form-check-label" for="presetRadiosMandelbox">
+                            Mandelbox
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="presetRadios" id="presetRadiosTreeFractal" value="tree">
+                        <label class="form-check-label" for="presetRadiosTreeFractal">
+                            Tree Fractal
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="presetRadios" id="presetRadiosBroccoli" value="broccoli">
+                        <label class="form-check-label" for="presetRadiosBroccoli">
+                            Broccoli
+                        </label>
+                    </div>
+
+                  </div>
+                  <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary">Save changes</button>
+                  </div>
+                </div>
+              </div>
+            </div> <!--Presets Modal-->
+
+            <!-- Cards Modal -->
+            <div class="modal fade" id="cardsModal" tabindex="-1" aria-labelledby="cardsModalLabel" aria-hidden="true">
+              <div class="modal-dialog">
+                <div class="modal-content">
+                  <div class="modal-header bg-secondary text-light">
+                    <h5 class="modal-title" id="cardsModalLabel">Add Card</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                      <span aria-hidden="true">&times;</span>
+                    </button>
+                  </div>
+                  <div class="modal-body">
+                    <p>Select the type of card you would like to add to your Cards section.</p>
+
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="cardsRadios" id="cardsRadiosPlane" value="plane">
+                        <label class="form-check-label" for="presetRadiosMandelbox">
+                            Plane Fold
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="cardsRadios" id="cardsRadiosBox" value="box">
+                        <label class="form-check-label" for="cardsRadiosBox">
+                            Box Fold
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="cardsRadios" id="cardsRadiosSierpinski" value="sierpinski">
+                        <label class="form-check-label" for="cardsRadiosSierpinski">
+                            Sierpinski Fold
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="cardsRadios" id="cardsRadiosMenger" value="menger">
+                        <label class="form-check-label" for="cardsRadiosMenger">
+                            Menger Fold
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="cardsRadios" id="c" value="abs">
+                        <label class="form-check-label" for="cardsRadiosMenger">
+                            Absolute Value Fold
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="cardsRadios" id="cardsRadiosSphere" value="sphere">
+                        <label class="form-check-label" for="cardsRadiosSphere">
+                            Sphere Fold
+                        </label>
+                    </div>
+
+                  </div>
+                  <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary">Add card</button>
+                  </div>
+                </div>
+              </div>
+            </div> <!--Cards Modal-->
+
+            <div class="row mt-4">
+                <div id="inputSection" class="col-sm-4 input-section">
+                    <div id="settingsSection" class="mb-4">
+
+                        <h2>Settings <button class="btn btn-link inline" type="button" data-toggle="collapse" data-target="#settingsContent" aria-expanded="false" aria-controls="collapseSettings">Show/Hide</button></h2>
+                        <div id="settingsContent" class="collapse">
+
+                            <form>
+
+                                <div class="form-group row">
+                                    <label for="inputFractalName" class="col-sm-4 col-form-label font-weight-bold">Name</label>
+                                    <div class="col-sm-8">
+                                        <input type="text" class="form-control" id="inputFractalName" placeholder="name of your fractal">
+                                    </div>
+                                </div> <!--Fractal Name-->
+
+                                <div class="form-group row">
+                                    <label for="inputIterations" class="col-sm-4 col-form-label font-weight-bold">Iterations</label>
+                                    <div class="col-sm-8">
+                                        <input type="number" min="1" max="10" value="5" class="form-control" id="inputIterations">
+                                    </div>
+                                </div> <!--Iterations-->
+
+                                <div class="form-group row">
+                                    <label for="selectOrbitTrap" class="col-sm-4 col-form-label font-weight-bold">Primative</label>
+                                    <div class="col-sm-8">
+                                        <select id="selectOrbitTrap" class="custom-select">
+                                            <option selected value="sphere">Sphere</option>
+                                            <option value="box">Box</option>
+                                            <option value="tetrahedron">Tetrahedron</option>
+                                            <option value="plane">Plane</option>
+                                            <option value="cross">Cross</option>
+                                            <option value="xyCross">XY Cross</option>
+                                            <option value="line">Line</option>
+                                        </select>
+                                    </div>
+                                </div> <!--Primative-->
+
+                                <!--Dynamic card display based on primative selected-->
+
+                                <div class="form-group row">
+                                    <label for="selectOrbitTrap" class="col-sm-4 col-form-label font-weight-bold">Orbit trap</label>
+                                    <div class="col-sm-8">
+                                        <select id="selectOrbitTrap" class="custom-select">
+                                            <option selected value="geometric">Geometric</option>
+                                            <option value="length">Length</option>
+                                        </select>
+                                    </div>
+                                </div> <!--Orbit Trap-->
+
+                                <div class="form-group row">
+                                    <label for="inputGlow" class="col-sm-4 col-form-label font-weight-bold">Glow</label>
+                                    <div class="col-sm-8">
+                                        <input type="number" step="0.1" min="0.0" max="10.0" value="0.0" class="form-control" id="inputGlow">
+                                    </div>
+                                </div> <!--Glow-->
+
+                                <div class="form-group row">
+                                    <label for="inputPoof" class="col-sm-4 col-form-label font-weight-bold">Poof</label>
+                                    <div class="col-sm-8">
+                                        <input type="number" step="0.1" min="0.0" max="10.0" value="0.0" class="form-control" id="inputPoof">
+                                    </div>
+                                </div> <!--Poof-->
+
+                            </form>
+
+                        </div>
+                    </div> <!--Settings-->
+
+                    <div id="cardsSection">
+                        <h2>Cards</h2>
+                        <button type="button" class="btn btn-secondary btn-md mb-2" data-toggle="modal" data-target="#cardsModal">Add new card</button>
+                        <button type="button" class="btn btn-secondary btn-md mb-2" data-toggle="modal" data-target="#presetsModal">Start with preset</button>
+                        <div id="cardsPanel" class="pr-2">
+
+                            <div id="planeCard" class="card mt-2">
+                                <div class="card-header bg-secondary text-light">
+                                    <h5 class="mb-0">
+                                        Plane Fold
+                                        <button type="button" class="close" aria-label="Close">
+                                            <span aria-hidden="true">&times;</span>
+                                        </button>
+                                    </h5>
+                                </div>
+                                <div class="card-body">
+                                    <h6>Normal</h6>
+                                    <div class="input-group">
+                                        <input
+                                            id="planeNormal1"
+                                            type="number"
+                                            aria-label="Plane Normal 1"
+                                            class="form-control"
+                                            placeholder="x">
+
+                                        <input
+                                            id="planeNormal2"
+                                            type="number"
+                                            aria-label="Plane Normal 2"
+                                            class="form-control"
+                                            placeholder="y">
+
+                                        <input
+                                            id="planeNormal3"
+                                            type="number"
+                                            aria-label="Plane Normal 3"
+                                            class="form-control"
+                                            placeholder="z">
+                                    </div>
+
+                                    <h6 class="mt-2">Offset</h6>
+                                    <input
+                                        id="planeOffset"
+                                        type="number"
+                                        aria-label="Normal 1"
+                                        class="form-control"
+                                        placeholder="offset">
+                                </div>
+                            </div> <!--Plane Card-->
+
+                            <div id="boxCard" class="card mt-2">
+                                <div class="card-header bg-secondary text-light">
+                                    <h5 class="mb-0">
+                                        Box Fold
+                                        <button type="button" class="close" aria-label="Close">
+                                            <span aria-hidden="true">&times;</span>
+                                        </button>
+                                    </h5>
+                                </div>
+                                <div class="card-body">
+                                    <h6>Normal</h6>
+                                    <div class="input-group">
+                                        <input
+                                            id="boxCenter1"
+                                            type="number"
+                                            aria-label="Box Center 1"
+                                            class="form-control"
+                                            placeholder="x">
+
+                                        <input
+                                            id="boxCenter2"
+                                            type="number"
+                                            aria-label="Box Center 2"
+                                            class="form-control"
+                                            placeholder="y">
+
+                                        <input
+                                            id="boxCenter3"
+                                            type="number"
+                                            aria-label="Box Center 3"
+                                            class="form-control"
+                                            placeholder="z">
+                                    </div>
+                                </div>
+                            </div> <!--Box Card-->
+
+                            <div id="sierpinskiCard" class="card mt-2">
+                                <div class="card-header bg-secondary text-light">
+                                    <h5 class="mb-0">
+                                        Sierpinski Fold
+                                        <button type="button" class="close" aria-label="Close">
+                                            <span aria-hidden="true">&times;</span>
+                                        </button>
+                                    </h5>
+                                </div>
+                                <div class="card-body">
+                                    <h6>No parameters required</h6>
+                                </div>
+                            </div> <!--Sierpinski Card-->
+
+                            <div id="mengerCard" class="card mt-2">
+                                <div class="card-header bg-secondary text-light">
+                                    <h5 class="mb-0">
+                                        Menger Fold
+                                        <button type="button" class="close" aria-label="Close">
+                                            <span aria-hidden="true">&times;</span>
+                                        </button>
+                                    </h5>
+                                </div>
+                                <div class="card-body">
+                                    <h6>No parameters required</h6>
+                                </div>
+                            </div> <!--Menger Card-->
+
+                            <div id="absCard" class="card mt-2">
+                                <div class="card-header bg-secondary text-light">
+                                    <h5 class="mb-0">
+                                        Absolute Value Fold
+                                        <button type="button" class="close" aria-label="Close">
+                                            <span aria-hidden="true">&times;</span>
+                                        </button>
+                                    </h5>
+                                </div>
+                                <div class="card-body">
+                                    <h6>Center</h6>
+                                    <div class="input-group">
+                                        <input
+                                            id="absCenter1"
+                                            type="number"
+                                            aria-label="ABS Center 1"
+                                            class="form-control"
+                                            placeholder="x">
+
+                                        <input
+                                            id="absCenter2"
+                                            type="number"
+                                            aria-label="ABS Center 2"
+                                            class="form-control"
+                                            placeholder="y">
+
+                                        <input
+                                            id="absCenter3"
+                                            type="number"
+                                            aria-label="ABS Center 3"
+                                            class="form-control"
+                                            placeholder="z">
+                                    </div>
+                                </div>
+                            </div> <!--Absolute Value Card-->
+
+                            <div id="sphereCard" class="card mt-2">
+                                <div class="card-header bg-secondary text-light">
+                                    <h5 class="mb-0">
+                                        Sphere Fold
+                                        <button type="button" class="close" aria-label="Close">
+                                            <span aria-hidden="true">&times;</span>
+                                        </button>
+                                    </h5>
+                                </div>
+                                <div class="card-body">
+                                    <h6>Min/Max Value</h6>
+
+                                    <div class="input-group">
+                                        <input
+                                            id="sphereMinimumValue"
+                                            type="number"
+                                            aria-label="Plane Normal 1"
+                                            class="form-control"
+                                            placeholder="min value">
+
+                                        <input
+                                            id="sphereMaximumValue"
+                                            type="number"
+                                            aria-label="Plane Normal 2"
+                                            class="form-control"
+                                            placeholder="max value">
+                                    </div>
+                                </div>
+                            </div> <!--Sphere Card-->
+
+                        </div>
+                    </div> <!--Cards-->
+                </div> <!--Settings and Cards-->
+                <div class="col-sm-8 canvas-section">
+                    <div class="row">
+                        <div class="col-sm-12">
+                            <h2>Output <button type="button" class="btn btn-secondary btn-md mb-2 ml-4">Apply settings</button></h2>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-sm-12 bg-light text-dark">
+                            <div id="canvas">
+                                <p class="p-4 text-center">HTML5 Canvas element - displays the WebGL raymarching</p>
+                            </div>
+                        </div>
+                    </div>
+                </div> <!--Output-->
+            </div>
+        </div>
+    </main>
+    </body>
+
+<script type="application/javascript">
+
+    function etxt (id) {
+        return document.getElementById(id).text;
+    }
+
+    /* Input types */
+    class Float {
+        constructor (x) {
+            this.x = x;
+        }
+        toGLSL () {
+            if (this.x.toString().indexOf(".") < 0) return this.x + ".0";
+            return this.x.toString();
+        }
+        setValue (x) {
+            this.x = x;
+        }
+    }
+
+    class Vector3  {
+        constructor (x, y, z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+        toGLSL () {
+            return "vec3(" + this.x + ", " + this.y + ", " + this.z + ")";
+        }
+        setValue (x, y, z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+    }
+
+    /* Fold class */
+    class Fold {
+        constructor (name, args) {
+            this.name = name;
+            this.args = args;
+        }
+        setArguments (args) {
+            this.args = args;
+        }
+        toGLSL () {
+            let str = "fold_" + this.name + "(z, ";
+            for (let i = 0; i < this.args.length; i ++) {
+                str += this.args[i].toGLSL();
+                if (i < this.args.length - 1) str += ",";
+            }
+            str += ");";
+            return str;
+        }
+    }
+
+    class Primitive {
+        constructor (name, args) {
+            this.name = name;
+            this.args = args;
+        }
+        setarguments (args) {
+            this.args = args;
+        }
+        toGLSL () {
+            let str = "sdf_" + this.name + "(z, ";
+            for (let i = 0; i < this.args.length; i ++) {
+                str += this.args[i].toGLSL();
+                if (i < this.args.length - 1) str += ",";
+            }
+            str += ")";
+            return str;
+        }
+    }
+
+    class OrbitTrapStart {
+        toGLSL () {
+            return "float ot = 100.0;";
+        }
+    }
+
+    class OrbitTrapUpdate {
+        toGLSL () {
+            return "ot = min(ot, length(z.xyz));";
+        }
+    }
+
+    /* Fractal class */
+    class Fractal {
+        constructor () {
+            this.folds = [];
+            this.primitive = null;
+        }
+        addFold (fold) {
+            this.folds.push(fold);
+        }
+        setPrimitive (primitive) {
+            this.primitive = primitive;
+        }
+        toGLSL () {
+            let str = "de_out de (vec3 pos) {\n";
+            str += "vec4 z = vec4(pos, 1.0);\n";
+            for (let i = 0; i < this.folds.length; i ++) {
+                str += this.folds[i].toGLSL() + "\n";
+            }
+            str += "return de_out(" + this.primitive.toGLSL() + ", ot);\n";
+            str += "}";
+            return str;
+        }
+    }
+
+    // const myFloat = new Fold("sphere", [new Float(1.0)]);
+    // console.log(myFloat.toGLSL());
+
+
+    const myFractal = new Fractal();
+    myFractal.addFold(new OrbitTrapStart());
+    for (var i = 0; i < 10; i ++) {
+        myFractal.addFold(new Fold("box", [new Vector3(1.0, 1.0, 1.0)]));
+        myFractal.addFold(new Fold("scale", [new Float(0.5)]));
+        myFractal.addFold(new OrbitTrapUpdate());
+    }
+    myFractal.setPrimitive(new Primitive("sphere", [new Float(1.0)]));
+
+    console.log(myFractal.toGLSL());
+
+
+</script>
+
+<!--Bootstrap related imports-->
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function(event) {
+        const w  =
+            window.innerWidth ||
+            document.documentElement.clientWidth ||
+            document.body.clientWidth;
+
+        const h =
+            window.innerHeight||
+            document.documentElement.clientHeight||
+            document.body.clientHeight;
+
+        if(w !== 900 && h !== 800) {
+            console.log("need ot change");
+        }
+        else {
+            console.log("All good to go");
+        }
+});
+
+</script>
+
+</html>
